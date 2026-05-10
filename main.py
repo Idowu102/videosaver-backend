@@ -21,53 +21,35 @@ def home():
 
     return {
         "status": "running",
-        "message": "Video Saver Backend Running"
+        "message": "Advanced Video Downloader Backend"
     }
 
-# ================= YT-DLP OPTIONS =================
-
-def get_ydl_opts():
-
-    return {
-
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "skip_download": True,
-
-        # Important
-        "extract_flat": False,
-        "nocheckcertificate": True,
-
-        # safer format
-        "format": "best",
-
-        # browser headers
-        "http_headers": {
-            "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
-        },
-
-        # YouTube anti-bot bypass
-        "extractor_args": {
-            "youtube": {
-                "player_client": [
-                    "android",
-                    "web_creator",
-                    "web"
-                ]
-            }
-        }
-    }
-
-# ================= VIDEO =================
+# ================= EXTRACT VIDEO =================
 
 @app.get("/extract")
 def extract(url: str):
 
     try:
 
-        ydl_opts = get_ydl_opts()
+        ydl_opts = {
+
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "skip_download": True,
+
+            # IMPORTANT
+            "cookiefile": "cookies.txt",
+
+            "http_headers": {
+
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/137.0.0.0 Safari/537.36"
+                )
+            }
+        }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 
@@ -76,68 +58,82 @@ def extract(url: str):
                 download=False
             )
 
-            if not info:
+            if info is None:
 
                 return {
                     "status": "failed",
                     "error": "Video not found"
                 }
 
+            # ================= FORMATS =================
+
             formats_list = []
 
-            formats = info.get("formats", [])
+            if "formats" in info:
 
-            for f in formats:
+                for f in info["formats"]:
 
-                video_url = f.get("url")
+                    # skip empty urls
+                    if not f.get("url"):
+                        continue
 
-                if not video_url:
-                    continue
+                    # skip audio-only
+                    if f.get("vcodec") == "none":
+                        continue
 
-                # skip audio-only
-                if f.get("vcodec") == "none":
-                    continue
+                    formats_list.append({
 
-                formats_list.append({
+                        "format_id":
+                            f.get("format_id", ""),
 
-                    "format_id":
-                        f.get("format_id", ""),
+                        "quality":
+                            f.get("format_note", "unknown"),
 
-                    "quality":
-                        f.get("format_note", "unknown"),
+                        "ext":
+                            f.get("ext", ""),
 
-                    "ext":
-                        f.get("ext", ""),
+                        "filesize":
+                            f.get("filesize", 0),
 
-                    "url":
-                        video_url
-                })
+                        "url":
+                            f.get("url", "")
+                    })
 
-            # Best video URL
+            # ================= BEST DOWNLOAD =================
+
             best_url = ""
 
-            for f in reversed(formats_list):
+            if len(formats_list) > 0:
 
-                if f["url"]:
-
-                    best_url = f["url"]
-                    break
+                best_url = formats_list[-1]["url"]
 
             return {
 
                 "status": "success",
 
                 "title":
-                    info.get("title", "Unknown"),
+                    info.get(
+                        "title",
+                        "Unknown"
+                    ),
 
                 "thumbnail":
-                    info.get("thumbnail", ""),
+                    info.get(
+                        "thumbnail",
+                        ""
+                    ),
 
                 "duration":
-                    info.get("duration", 0),
+                    info.get(
+                        "duration",
+                        0
+                    ),
 
                 "platform":
-                    info.get("extractor", "unknown"),
+                    info.get(
+                        "extractor",
+                        "unknown"
+                    ),
 
                 "best_download":
                     best_url,
@@ -151,19 +147,37 @@ def extract(url: str):
         return {
 
             "status": "failed",
+
             "error": str(e)
         }
 
-# ================= AUDIO =================
+# ================= AUDIO ONLY =================
 
 @app.get("/audio")
 def audio(url: str):
 
     try:
 
-        ydl_opts = get_ydl_opts()
+        ydl_opts = {
 
-        ydl_opts["format"] = "bestaudio"
+            "quiet": True,
+            "skip_download": True,
+
+            # IMPORTANT
+            "cookiefile": "cookies.txt",
+
+            "format":
+                "bestaudio/best",
+
+            "http_headers": {
+
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/137.0.0.0 Safari/537.36"
+                )
+            }
+        }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 
@@ -172,28 +186,23 @@ def audio(url: str):
                 download=False
             )
 
-            formats = info.get("formats", [])
-
-            audio_url = ""
-
-            for f in reversed(formats):
-
-                if f.get("acodec") != "none":
-
-                    if f.get("url"):
-
-                        audio_url = f.get("url")
-                        break
+            audio_url = info.get("url", "")
 
             return {
 
                 "status": "success",
 
                 "title":
-                    info.get("title", "Unknown"),
+                    info.get(
+                        "title",
+                        "Unknown"
+                    ),
 
                 "thumbnail":
-                    info.get("thumbnail", ""),
+                    info.get(
+                        "thumbnail",
+                        ""
+                    ),
 
                 "audio_url":
                     audio_url
@@ -204,5 +213,6 @@ def audio(url: str):
         return {
 
             "status": "failed",
+
             "error": str(e)
         }
