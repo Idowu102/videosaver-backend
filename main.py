@@ -1,6 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
+import socket
+
+# ================= TIMEOUT =================
+
+socket.setdefaulttimeout(30)
+
+# ================= FASTAPI =================
 
 app = FastAPI()
 
@@ -24,6 +31,54 @@ def home():
         "message": "Advanced Video Downloader Backend"
     }
 
+# ================= COMMON YTDLP OPTIONS =================
+
+def get_ydl_opts():
+
+    return {
+
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "skip_download": True,
+
+        # IMPORTANT
+        "cookiefile": "cookies.txt",
+
+        # SSL fix
+        "nocheckcertificate": True,
+
+        # Better extraction
+        "extract_flat": False,
+
+        # Better compatibility
+        "geo_bypass": True,
+
+        # Prevent some bot checks
+        "extractor_args": {
+
+            "youtube": {
+                "player_client": ["android"]
+            },
+
+            "facebook": {
+                "allow_unplayable_formats": ["true"]
+            }
+        },
+
+        # Browser headers
+        "http_headers": {
+
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/137.0.0.0 Safari/537.36"
+            ),
+
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+    }
+
 # ================= EXTRACT VIDEO =================
 
 @app.get("/extract")
@@ -31,25 +86,7 @@ def extract(url: str):
 
     try:
 
-        ydl_opts = {
-
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "skip_download": True,
-
-            # IMPORTANT
-            "cookiefile": "cookies.txt",
-
-            "http_headers": {
-
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/137.0.0.0 Safari/537.36"
-                )
-            }
-        }
+        ydl_opts = get_ydl_opts()
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 
@@ -73,11 +110,11 @@ def extract(url: str):
 
                 for f in info["formats"]:
 
-                    # skip empty urls
+                    # skip empty url
                     if not f.get("url"):
                         continue
 
-                    # skip audio-only
+                    # skip audio only
                     if f.get("vcodec") == "none":
                         continue
 
@@ -99,7 +136,7 @@ def extract(url: str):
                             f.get("url", "")
                     })
 
-            # ================= BEST DOWNLOAD =================
+            # ================= BEST QUALITY =================
 
             best_url = ""
 
@@ -158,26 +195,9 @@ def audio(url: str):
 
     try:
 
-        ydl_opts = {
+        ydl_opts = get_ydl_opts()
 
-            "quiet": True,
-            "skip_download": True,
-
-            # IMPORTANT
-            "cookiefile": "cookies.txt",
-
-            "format":
-                "bestaudio/best",
-
-            "http_headers": {
-
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/137.0.0.0 Safari/537.36"
-                )
-            }
-        }
+        ydl_opts["format"] = "bestaudio/best"
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 
