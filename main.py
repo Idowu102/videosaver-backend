@@ -21,36 +21,38 @@ def home():
 
     return {
         "status": "running",
-        "message": "Advanced Video Downloader Backend"
+        "message": "Video Saver Backend Running"
     }
 
-# ================= COMMON YTDLP OPTIONS =================
+# ================= COMMON OPTIONS =================
 
 def get_ydl_opts():
 
     return {
-
-        # IMPORTANT
-        "cookiefile": "cookies.txt",
 
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "skip_download": True,
 
-        # Better bypass
-        "extractor_retries": 3,
+        # IMPORTANT
+        "extract_flat": False,
 
+        # Better youtube bypass
         "http_headers": {
-
             "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+        },
+
+        # Force android client
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android"]
+            }
         }
     }
 
-# ================= EXTRACT VIDEO =================
+# ================= VIDEO =================
 
 @app.get("/extract")
 def extract(url: str):
@@ -66,83 +68,67 @@ def extract(url: str):
                 download=False
             )
 
-            if info is None:
+            if not info:
 
                 return {
                     "status": "failed",
                     "error": "Video not found"
                 }
 
-            # ================= FORMATS =================
-
             formats_list = []
 
-            if "formats" in info:
+            formats = info.get("formats", [])
 
-                for f in info["formats"]:
+            for f in formats:
 
-                    # Skip invalid
-                    if not f.get("url"):
-                        continue
+                video_url = f.get("url")
 
-                    # Skip audio only
-                    if f.get("vcodec") == "none":
-                        continue
+                if not video_url:
+                    continue
 
-                    formats_list.append({
+                # skip audio-only
+                if f.get("vcodec") == "none":
+                    continue
 
-                        "format_id":
-                            f.get("format_id", ""),
+                formats_list.append({
 
-                        "quality":
-                            f.get("format_note", "unknown"),
+                    "format_id":
+                        f.get("format_id", ""),
 
-                        "ext":
-                            f.get("ext", ""),
+                    "quality":
+                        f.get("format_note", "unknown"),
 
-                        "filesize":
-                            f.get("filesize", 0),
+                    "ext":
+                        f.get("ext", ""),
 
-                        "url":
-                            f.get("url", "")
-                    })
+                    "url":
+                        video_url
+                })
 
-            # ================= BEST URL =================
-
+            # safer best format
             best_url = ""
 
-            if len(formats_list) > 0:
+            for f in reversed(formats_list):
 
-                # Pick highest quality
-                best_url = formats_list[-1]["url"]
+                if f["url"]:
+                    best_url = f["url"]
+                    break
 
             return {
 
                 "status": "success",
 
                 "title":
-                    info.get(
-                        "title",
-                        "Unknown"
-                    ),
+                    info.get("title", "Unknown"),
 
                 "thumbnail":
-                    info.get(
-                        "thumbnail",
-                        ""
-                    ),
+                    info.get("thumbnail", ""),
 
                 "duration":
-                    info.get(
-                        "duration",
-                        0
-                    ),
+                    info.get("duration", 0),
 
                 "platform":
-                    info.get(
-                        "extractor",
-                        "unknown"
-                    ),
+                    info.get("extractor", "unknown"),
 
                 "best_download":
                     best_url,
@@ -156,7 +142,6 @@ def extract(url: str):
         return {
 
             "status": "failed",
-
             "error": str(e)
         }
 
@@ -169,8 +154,7 @@ def audio(url: str):
 
         ydl_opts = get_ydl_opts()
 
-        # Best audio
-        ydl_opts["format"] = "bestaudio/best"
+        ydl_opts["format"] = "bestaudio"
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 
@@ -179,23 +163,28 @@ def audio(url: str):
                 download=False
             )
 
-            audio_url = info.get("url", "")
+            audio_url = ""
+
+            formats = info.get("formats", [])
+
+            for f in reversed(formats):
+
+                if f.get("acodec") != "none":
+
+                    if f.get("url"):
+
+                        audio_url = f.get("url")
+                        break
 
             return {
 
                 "status": "success",
 
                 "title":
-                    info.get(
-                        "title",
-                        "Unknown"
-                    ),
+                    info.get("title", "Unknown"),
 
                 "thumbnail":
-                    info.get(
-                        "thumbnail",
-                        ""
-                    ),
+                    info.get("thumbnail", ""),
 
                 "audio_url":
                     audio_url
@@ -206,6 +195,5 @@ def audio(url: str):
         return {
 
             "status": "failed",
-
             "error": str(e)
         }
