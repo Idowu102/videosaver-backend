@@ -24,25 +24,40 @@ def home():
         "message": "Advanced Video Downloader Backend"
     }
 
-# ================= EXTRACT =================
+# ================= COMMON YTDLP OPTIONS =================
+
+def get_ydl_opts():
+
+    return {
+
+        # IMPORTANT
+        "cookiefile": "cookies.txt",
+
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "skip_download": True,
+
+        # Better bypass
+        "extractor_retries": 3,
+
+        "http_headers": {
+
+            "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        }
+    }
+
+# ================= EXTRACT VIDEO =================
 
 @app.get("/extract")
 def extract(url: str):
 
     try:
 
-        ydl_opts = {
-
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "skip_download": True,
-
-            "http_headers": {
-                "User-Agent":
-                "Mozilla/5.0"
-            }
-        }
+        ydl_opts = get_ydl_opts()
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 
@@ -66,10 +81,11 @@ def extract(url: str):
 
                 for f in info["formats"]:
 
+                    # Skip invalid
                     if not f.get("url"):
                         continue
 
-                    # SKIP DASH AUDIO ONLY
+                    # Skip audio only
                     if f.get("vcodec") == "none":
                         continue
 
@@ -91,10 +107,13 @@ def extract(url: str):
                             f.get("url", "")
                     })
 
-            # BEST URL
+            # ================= BEST URL =================
+
             best_url = ""
 
             if len(formats_list) > 0:
+
+                # Pick highest quality
                 best_url = formats_list[-1]["url"]
 
             return {
@@ -141,21 +160,17 @@ def extract(url: str):
             "error": str(e)
         }
 
-# ================= AUDIO ONLY =================
+# ================= AUDIO =================
 
 @app.get("/audio")
 def audio(url: str):
 
     try:
 
-        ydl_opts = {
+        ydl_opts = get_ydl_opts()
 
-            "quiet": True,
-            "skip_download": True,
-
-            "format":
-                "bestaudio/best"
-        }
+        # Best audio
+        ydl_opts["format"] = "bestaudio/best"
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 
