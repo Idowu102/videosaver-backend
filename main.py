@@ -24,7 +24,7 @@ def home():
         "message": "Video Saver Backend Running"
     }
 
-# ================= COMMON OPTIONS =================
+# ================= YT-DLP OPTIONS =================
 
 def get_ydl_opts():
 
@@ -35,19 +35,27 @@ def get_ydl_opts():
         "noplaylist": True,
         "skip_download": True,
 
-        # IMPORTANT
+        # Important
         "extract_flat": False,
+        "nocheckcertificate": True,
 
-        # Better youtube bypass
+        # safer format
+        "format": "best",
+
+        # browser headers
         "http_headers": {
             "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
         },
 
-        # Force android client
+        # YouTube anti-bot bypass
         "extractor_args": {
             "youtube": {
-                "player_client": ["android"]
+                "player_client": [
+                    "android",
+                    "web_creator",
+                    "web"
+                ]
             }
         }
     }
@@ -105,12 +113,13 @@ def extract(url: str):
                         video_url
                 })
 
-            # safer best format
+            # Best video URL
             best_url = ""
 
             for f in reversed(formats_list):
 
                 if f["url"]:
+
                     best_url = f["url"]
                     break
 
@@ -163,9 +172,9 @@ def audio(url: str):
                 download=False
             )
 
-            audio_url = ""
-
             formats = info.get("formats", [])
+
+            audio_url = ""
 
             for f in reversed(formats):
 
