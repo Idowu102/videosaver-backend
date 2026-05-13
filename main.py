@@ -2,16 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
 import socket
-
-# ================= TIMEOUT =================
+import time
+import random
 
 socket.setdefaulttimeout(30)
 
-# ================= FASTAPI =================
-
 app = FastAPI()
-
-# ================= CORS =================
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,218 +17,183 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ================= HOME =================
+# ================= USER AGENTS =================
 
-@app.get("/")
-def home():
+UA_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/137.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/136.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15",
+]
 
-    return {
-        "status": "running",
-        "message": "Advanced Video Downloader Backend"
-    }
+# ================= CORE ENGINE =================
 
-# ================= COMMON YTDLP OPTIONS =================
+def build_opts(extra=None):
 
-def get_ydl_opts():
-
-    return {
-
+    opts = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "skip_download": True,
 
-        # IMPORTANT
+        # cookies (VERY IMPORTANT)
         "cookiefile": "cookies.txt",
 
-        # SSL fix
+        # stability
         "nocheckcertificate": True,
-
-        # Better extraction
-        "extract_flat": False,
-
-        # Better compatibility
         "geo_bypass": True,
+        "retries": 10,
+        "fragment_retries": 10,
+        "socket_timeout": 30,
 
-        # Prevent some bot checks
+        # anti-bot rotation
+        "http_headers": {
+            "User-Agent": random.choice(UA_POOL),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+
+        # multi-client extraction
         "extractor_args": {
-
             "youtube": {
-                "player_client": ["android"]
-            },
-
-            "facebook": {
-                "allow_unplayable_formats": ["true"]
+                "player_client": ["web", "android", "tv"]
             }
         },
 
-        # Browser headers
-        "http_headers": {
-
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/137.0.0.0 Safari/537.36"
-            ),
-
-            "Accept-Language": "en-US,en;q=0.9"
-        }
+        # best format
+        "format": "bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
     }
 
-# ================= EXTRACT VIDEO =================
+    if extra:
+        opts.update(extra)
+
+    return opts
+
+
+# ================= RETRY ENGINE =================
+
+def safe_extract(url, retries=3):
+
+    last_error = None
+
+    for i in range(retries):
+
+        try:
+            opts = build_opts()
+
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+            if info:
+                return info
+
+        except Exception as e:
+            last_error = str(e)
+            time.sleep(1.5)
+
+    return {"error": last_error}
+
+
+# ================= HOME =================
+
+@app.get("/")
+def home():
+    return {
+        "status": "running",
+        "system": "ULTRA PRO DOWNLOADER",
+        "version": "3.0"
+    }
+
+
+# ================= EXTRACT =================
 
 @app.get("/extract")
 def extract(url: str):
 
-    try:
+    info = safe_extract(url)
 
-        ydl_opts = get_ydl_opts()
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-
-            info = ydl.extract_info(
-                url,
-                download=False
-            )
-
-            if info is None:
-
-                return {
-                    "status": "failed",
-                    "error": "Video not found"
-                }
-
-            # ================= FORMATS =================
-
-            formats_list = []
-
-            if "formats" in info:
-
-                for f in info["formats"]:
-
-                    # skip empty url
-                    if not f.get("url"):
-                        continue
-
-                    # skip audio only
-                    if f.get("vcodec") == "none":
-                        continue
-
-                    formats_list.append({
-
-                        "format_id":
-                            f.get("format_id", ""),
-
-                        "quality":
-                            f.get("format_note", "unknown"),
-
-                        "ext":
-                            f.get("ext", ""),
-
-                        "filesize":
-                            f.get("filesize", 0),
-
-                        "url":
-                            f.get("url", "")
-                    })
-
-            # ================= BEST QUALITY =================
-
-            best_url = ""
-
-            if len(formats_list) > 0:
-
-                best_url = formats_list[-1]["url"]
-
-            return {
-
-                "status": "success",
-
-                "title":
-                    info.get(
-                        "title",
-                        "Unknown"
-                    ),
-
-                "thumbnail":
-                    info.get(
-                        "thumbnail",
-                        ""
-                    ),
-
-                "duration":
-                    info.get(
-                        "duration",
-                        0
-                    ),
-
-                "platform":
-                    info.get(
-                        "extractor",
-                        "unknown"
-                    ),
-
-                "best_download":
-                    best_url,
-
-                "formats":
-                    formats_list
-            }
-
-    except Exception as e:
-
+    if "error" in info:
         return {
-
             "status": "failed",
-
-            "error": str(e)
+            "error": info["error"]
         }
 
-# ================= AUDIO ONLY =================
+    formats = []
+
+    for f in info.get("formats", []):
+
+        if not f.get("url"):
+            continue
+
+        if f.get("vcodec") == "none":
+            continue
+
+        formats.append({
+            "id": f.get("format_id"),
+            "quality": f.get("format_note"),
+            "ext": f.get("ext"),
+            "size": f.get("filesize", 0),
+            "url": f.get("url")
+        })
+
+    best = formats[-1]["url"] if formats else ""
+
+    return {
+        "status": "success",
+        "title": info.get("title"),
+        "thumbnail": info.get("thumbnail"),
+        "duration": info.get("duration"),
+        "platform": info.get("extractor"),
+        "best_download": best,
+        "formats": formats
+    }
+
+
+# ================= AUDIO =================
 
 @app.get("/audio")
 def audio(url: str):
 
     try:
+        opts = build_opts({"format": "bestaudio/best"})
 
-        ydl_opts = get_ydl_opts()
-
-        ydl_opts["format"] = "bestaudio/best"
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-
-            info = ydl.extract_info(
-                url,
-                download=False
-            )
-
-            audio_url = info.get("url", "")
-
-            return {
-
-                "status": "success",
-
-                "title":
-                    info.get(
-                        "title",
-                        "Unknown"
-                    ),
-
-                "thumbnail":
-                    info.get(
-                        "thumbnail",
-                        ""
-                    ),
-
-                "audio_url":
-                    audio_url
-            }
-
-    except Exception as e:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
 
         return {
+            "status": "success",
+            "title": info.get("title"),
+            "audio_url": info.get("url")
+        }
 
+    except Exception as e:
+        return {
             "status": "failed",
+            "error": str(e)
+        }
 
+
+# ================= DIRECT DOWNLOAD LINK =================
+
+@app.get("/download")
+def download(url: str):
+
+    try:
+        opts = build_opts({
+            "format": "bestvideo+bestaudio/best",
+        })
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        return {
+            "status": "success",
+            "title": info.get("title"),
+            "download_url": info.get("url"),
+            "ext": "mp4"
+        }
+
+    except Exception as e:
+        return {
+            "status": "failed",
             "error": str(e)
         }
