@@ -1,6 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
+import socket
+
+socket.setdefaulttimeout(60)
 
 app = FastAPI()
 
@@ -14,47 +17,80 @@ app.add_middleware(
 
 @app.get("/")
 def home():
-    return {"status": "running"}
+    return {"status": "running", "message": "API active"}
 
-@app.get("/extract")
-def extract(url: str):
-    try:
-        ydl_opts = {
-            "quiet": True,
-            "skip_download": True,
-            "cookiefile": "cookies.txt"
-        }
+# ================= OPTIONS =================
+def opts():
+    return {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "nocheckcertificate": True,
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-
-            return {
-                "status": "success",
-                "title": info.get("title", ""),
-                "thumbnail": info.get("thumbnail", ""),
-                "best_download": info["url"]
+        # IMPORTANT FIX
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"]
             }
+        },
+
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0"
+        }
+    }
+
+def extract(url: str):
+    with yt_dlp.YoutubeDL(opts()) as ydl:
+        return ydl.extract_info(url, download=False)
+
+# ================= INFO =================
+@app.get("/info")
+def info(url: str = Query(...)):
+    try:
+        data = extract(url)
+
+        return {
+            "status": "success",
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "duration": data.get("duration")
+        }
 
     except Exception as e:
         return {"status": "failed", "error": str(e)}
 
-@app.get("/audio")
-def audio(url: str):
+# ================= STREAM =================
+@app.get("/stream")
+def stream(url: str = Query(...)):
     try:
-        ydl_opts = {
-            "quiet": True,
-            "skip_download": True,
-            "cookiefile": "cookies.txt",
-            "format": "bestaudio/best"
+        data = extract(url)
+
+        # yt-dlp already gives best playable URL
+        return {
+            "status": "success",
+            "title": data.get("title"),
+            "stream_url": data.get("url"),
+            "thumbnail": data.get("thumbnail")
         }
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
 
-            return {
-                "status": "success",
-                "audio_url": info["url"]
-            }
+# ================= AUDIO =================
+@app.get("/audio")
+def audio(url: str = Query(...)):
+    try:
+        ydl_opts = opts()
+        ydl_opts["format"] = "bestaudio"
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            data = ydl.extract_info(url, download=False)
+
+        return {
+            "status": "success",
+            "title": data.get("title"),
+            "audio_url": data.get("url")
+        }
 
     except Exception as e:
         return {"status": "failed", "error": str(e)}
