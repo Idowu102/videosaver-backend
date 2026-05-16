@@ -46,10 +46,10 @@ def base_opts():
         },
 
         "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "web"]
-            }
-        }
+    "youtube": {
+        "player_client": ["android"]
+    }
+}
     }
 
 # ================= CLEAN URL =================
@@ -100,17 +100,24 @@ def stream(url: str):
 
         stream_url = data.get("url")
 
+        # fallback safe method
         if not stream_url:
-            for f in data.get("formats", []):
+            formats = data.get("formats", [])
+            for f in formats:
                 if f.get("url") and f.get("vcodec") != "none":
                     stream_url = f["url"]
                     break
+
+        if not stream_url:
+            return {
+                "status": "failed",
+                "error": "No playable stream found"
+            }
 
         return {
             "status": "success",
             "title": data.get("title"),
             "thumbnail": data.get("thumbnail"),
-            "duration": data.get("duration"),
             "stream_url": stream_url
         }
 
@@ -125,19 +132,20 @@ def stream(url: str):
 def audio(url: str):
 
     try:
-        url = clean_url(url)
+        data = safe_extract(url)
 
-        opts = base_opts()
-        opts["format"] = "bestaudio/best"
+        audio_url = data.get("url")
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            data = ydl.extract_info(url, download=False)
+        if not audio_url:
+            for f in data.get("formats", []):
+                if f.get("acodec") != "none" and f.get("url"):
+                    audio_url = f["url"]
+                    break
 
         return {
             "status": "success",
             "title": data.get("title"),
-            "thumbnail": data.get("thumbnail"),
-            "audio_url": data.get("url")
+            "audio_url": audio_url
         }
 
     except Exception as e:
