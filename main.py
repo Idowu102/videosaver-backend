@@ -45,9 +45,9 @@ def base_opts():
             "Accept-Language": "en-US,en;q=0.9",
         },
 
-        "extractor_args": {
+       "extractor_args": {
     "youtube": {
-        "player_client": ["android"]
+        "player_client": ["web", "android"]
     }
 }
     }
