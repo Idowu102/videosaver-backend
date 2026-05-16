@@ -3,9 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
 import socket
 
-socket.setdefaulttimeout(30)
+socket.setdefaulttimeout(60)
 
 app = FastAPI()
+
+# ================= CORS =================
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,11 +17,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ================= HOME =================
+
 @app.get("/")
 def home():
+
     return {
         "status": "running",
-        "message": "Advanced Video Downloader Backend"
+        "message": "Video Downloader Backend Active"
     }
 
 # ================= YDL OPTIONS =================
@@ -29,35 +34,22 @@ def get_ydl_opts():
     return {
 
         "quiet": True,
+
         "no_warnings": True,
 
         "noplaylist": True,
-        "skip_download": True,
 
-        "cookiefile": "cookies.txt",
+        "skip_download": True,
 
         "nocheckcertificate": True,
 
-        "extract_flat": False,
-
         "geo_bypass": True,
 
-        # IMPORTANT FIX
-        "format": (
-            "bestvideo[height<=720]+bestaudio/"
-            "best[height<=720]/best"
-        ),
+        "cookiefile": "cookies.txt",
 
-        "extractor_args": {
+        "extract_flat": False,
 
-            "youtube": {
-                "player_client": ["android"]
-            },
-
-            "facebook": {
-                "allow_unplayable_formats": ["true"]
-            }
-        },
+        "socket_timeout": 60,
 
         "http_headers": {
 
@@ -69,6 +61,17 @@ def get_ydl_opts():
 
             "Accept-Language":
                 "en-US,en;q=0.9"
+        },
+
+        "extractor_args": {
+
+            "youtube": {
+
+                "player_client": [
+                    "android",
+                    "web"
+                ]
+            }
         }
     }
 
@@ -80,6 +83,11 @@ def extract(url: str):
     try:
 
         ydl_opts = get_ydl_opts()
+
+        ydl_opts["format"] = (
+            "bestvideo[height<=720]+bestaudio/"
+            "best[height<=720]/best"
+        )
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 
@@ -123,7 +131,7 @@ def extract(url: str):
                         f.get("url", "")
                 })
 
-            # BEST FORMAT WITH AUDIO
+            # ================= BEST VIDEO =================
 
             best_url = ""
 
@@ -135,14 +143,11 @@ def extract(url: str):
                 if f.get("vcodec") == "none":
                     continue
 
-                if f.get("acodec") == "none":
-                    continue
-
                 best_url = f.get("url", "")
                 break
 
-            # FALLBACK
             if best_url == "":
+
                 best_url = info.get("url", "")
 
             return {
@@ -171,8 +176,11 @@ def extract(url: str):
     except Exception as e:
 
         return {
+
             "status": "failed",
-            "error": str(e)
+
+            "error":
+                str(e)
         }
 
 # ================= AUDIO =================
@@ -195,19 +203,19 @@ def audio(url: str):
 
             audio_url = ""
 
-            # SAFER AUDIO SEARCH
+            for f in reversed(info.get("formats", [])):
 
-            for f in info.get("formats", []):
+                if not f.get("url"):
+                    continue
 
-                if (
-                    f.get("acodec") != "none"
-                    and f.get("url")
-                ):
+                if f.get("acodec") == "none":
+                    continue
 
-                    audio_url = f.get("url")
-                    break
+                audio_url = f.get("url")
+                break
 
             if audio_url == "":
+
                 audio_url = info.get("url", "")
 
             return {
@@ -227,6 +235,9 @@ def audio(url: str):
     except Exception as e:
 
         return {
+
             "status": "failed",
-            "error": str(e)
+
+            "error":
+                str(e)
         }
