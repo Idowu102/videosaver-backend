@@ -65,11 +65,7 @@ def base_opts():
 
             "youtube": {
 
-                "player_client": [
-                    "android",
-                    "web",
-                    "tv"
-                ]
+               "player_client": ["android"]
             }
         },
 
