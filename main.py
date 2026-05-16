@@ -89,34 +89,37 @@ def info(url: str):
 
     try:
 
-        info = safe_extract(url)
+       def safe_extract(url):
 
-        return {
+    import yt_dlp
 
-            "status": "success",
+    url = url.split("&list=")[0]
+    url = url.split("&pp=")[0]
 
-            "title":
-                info.get("title"),
+    opts = base_opts()
 
-            "thumbnail":
-                info.get("thumbnail"),
+    # IMPORTANT: force modern extraction
+    opts["extractor_args"] = {
+        "youtube": {
+            "player_client": ["android", "web"]
+        }
+    }
 
-            "duration":
-                info.get("duration"),
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=False)
 
-            "platform":
-                info.get("extractor"),
+    except Exception:
+
+        # fallback mode (less strict)
+        opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["android"]
+            }
         }
 
-    except Exception as e:
-
-        return {
-
-            "status": "failed",
-
-            "error":
-                str(e)
-        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=False)
 
 # ================= STREAM =================
 
