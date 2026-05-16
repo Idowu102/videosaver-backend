@@ -21,10 +21,17 @@ app.add_middleware(
 def home():
     return {
         "status": "running",
-        "message": "🔥 Production Streaming API Active"
+        "message": "Video Streaming API Active"
     }
 
-# ================= BASE OPTIONS =================
+# ================= CLEAN URL =================
+def clean_url(url: str):
+    # remove playlist / radio noise
+    if "list=" in url:
+        url = url.split("&list=")[0]
+    return url
+
+# ================= YTDLP OPTIONS =================
 def base_opts():
     return {
         "quiet": True,
@@ -33,10 +40,7 @@ def base_opts():
         "nocheckcertificate": True,
         "geo_bypass": True,
         "socket_timeout": 60,
-
-        # optional (only if you really need it)
-        "cookiefile": "cookies.txt",
-
+        "format": "best",
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -44,21 +48,26 @@ def base_opts():
                 "Chrome/122.0 Safari/537.36"
             )
         },
-
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "web", "tv"]
+                "player_client": ["android", "web"]
             }
         }
     }
 
-# ================= SAFE EXTRACT =================
+# ================= CORE EXTRACT =================
 def extract_video(url: str):
+    url = clean_url(url)
+
     opts = base_opts()
-    opts["format"] = "best"
 
     with yt_dlp.YoutubeDL(opts) as ydl:
-        return ydl.extract_info(url, download=False)
+        info = ydl.extract_info(url, download=False)
+
+        if not info:
+            raise Exception("No video info found")
+
+        return info
 
 # ================= INFO =================
 @app.get("/info")
@@ -90,7 +99,7 @@ def stream(url: str):
 
         stream_url = data.get("url")
 
-        # fallback method (safe)
+        # fallback safe loop
         if not stream_url:
             for f in data.get("formats", []):
                 if f.get("url") and f.get("vcodec") != "none":
@@ -130,12 +139,12 @@ def audio(url: str):
                         audio_url = f["url"]
                         break
 
-            return {
-                "status": "success",
-                "title": data.get("title"),
-                "thumbnail": data.get("thumbnail"),
-                "audio_url": audio_url
-            }
+        return {
+            "status": "success",
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "audio_url": audio_url
+        }
 
     except Exception as e:
         return {
