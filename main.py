@@ -1,11 +1,10 @@
-from fastapi import FastAPI, BackgroundTasks, Query
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
 import socket
 import os
 import uuid
 import threading
-import random
 import time
 
 socket.setdefaulttimeout(60)
@@ -28,24 +27,18 @@ lock = threading.Lock()
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# ================= USER AGENTS (ROTATION) =================
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/121.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15"
-]
+# ================= USER AGENT =================
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
-# ================= HOME =================
-@app.get("/")
-def home():
-    return {
-        "status": "running",
-        "message": "ANTI-BLOCK PRO YT Downloader Active"
-    }
-
-# ================= OPTIONS =================
-def get_ydl_opts():
+# ================= BASE OPTIONS =================
+def base_opts():
     return {
         "quiet": True,
         "no_warnings": True,
@@ -54,27 +47,106 @@ def get_ydl_opts():
         "geo_bypass": True,
         "socket_timeout": 60,
 
-        # 🔥 IMPORTANT: cookies fix
-        "cookiefile": "cookies.txt",
+        # 🔥 IMPORTANT: fix “not a robot”
+        "cookiefile": "cookies.txt",  # optional but recommended
 
-        # 🔥 anti-bot headers
-        "http_headers": {
-            "User-Agent": random.choice(USER_AGENTS),
-            "Accept-Language": "en-US,en;q=0.9"
-        },
+        "http_headers": HEADERS,
 
-        # 🔥 stronger YouTube bypass mode
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "web"],
+                "player_client": ["android", "web", "tv"]
             }
         },
 
-        # retry system
+        # retries
         "retries": 5,
         "fragment_retries": 5,
-        "skip_unavailable_fragments": True,
     }
+
+# ================= SMART FORMAT FALLBACK =================
+def get_format():
+    return [
+        "best[ext=mp4]/best",
+        "best",
+        "bestvideo+bestaudio/best",
+    ]
+
+# ================= SAFE EXTRACT =================
+def safe_extract(url):
+    last_error = None
+
+    for fmt in get_format():
+        try:
+            ydl_opts = base_opts()
+            ydl_opts["format"] = fmt
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(url, download=False)
+
+        except Exception as e:
+            last_error = str(e)
+            time.sleep(1)
+
+    raise Exception(last_error or "Extraction failed")
+
+# ================= HOME =================
+@app.get("/")
+def home():
+    return {
+        "status": "running",
+        "message": "🔥 Bulletproof Video Downloader API"
+    }
+
+# ================= EXTRACT =================
+@app.get("/extract")
+def extract(url: str):
+    try:
+        info = safe_extract(url)
+
+        formats = []
+
+        for f in info.get("formats", []):
+            if not f.get("url"):
+                continue
+
+            formats.append({
+                "format_id": f.get("format_id"),
+                "ext": f.get("ext"),
+                "quality": f.get("format_note"),
+                "filesize": f.get("filesize"),
+                "url": f.get("url")
+            })
+
+        return {
+            "status": "success",
+            "title": info.get("title"),
+            "thumbnail": info.get("thumbnail"),
+            "duration": info.get("duration"),
+            "best_url": info.get("url"),
+            "formats": formats
+        }
+
+    except Exception as e:
+        return {
+            "status": "failed",
+            "error": str(e)
+        }
+
+# ================= AUDIO =================
+@app.get("/audio")
+def audio(url: str):
+    try:
+        info = safe_extract(url)
+
+        return {
+            "status": "success",
+            "title": info.get("title"),
+            "audio_url": info.get("url"),
+            "thumbnail": info.get("thumbnail")
+        }
+
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
 
 # ================= PROGRESS =================
 def progress_hook(d):
@@ -88,11 +160,9 @@ def progress_hook(d):
             downloaded = d.get("downloaded_bytes", 0)
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 1
 
-            percent = round(downloaded / total * 100, 2)
-
             download_progress[file_id] = {
                 "status": "downloading",
-                "percent": percent,
+                "percent": round(downloaded / total * 100, 2),
                 "speed": d.get("speed"),
                 "eta": d.get("eta")
             }
@@ -103,91 +173,13 @@ def progress_hook(d):
                 "percent": 100
             }
 
-# ================= SAFE EXTRACT (WITH RETRIES) =================
-def safe_extract(url, retries=3):
-    for i in range(retries):
-        try:
-            ydl_opts = get_ydl_opts()
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                return ydl.extract_info(url, download=False)
-
-        except Exception as e:
-            msg = str(e)
-
-            # 🔥 wait and retry if blocked
-            if "not a robot" in msg.lower() or "sign in" in msg.lower():
-                time.sleep(2 + i * 2)
-                continue
-
-            raise e
-
-    return None
-
-# ================= EXTRACT =================
-@app.get("/extract")
-def extract(url: str):
+# ================= DOWNLOAD =================
+def download_task(url, file_id):
     try:
-        info = safe_extract(url)
-
-        if not info:
-            return {"status": "failed", "error": "Blocked or not found"}
-
-        formats_list = []
-
-        for f in info.get("formats", []):
-            if not f.get("url"):
-                continue
-            if f.get("vcodec") == "none":
-                continue
-
-            formats_list.append({
-                "format_id": f.get("format_id"),
-                "quality": f.get("format_note"),
-                "ext": f.get("ext"),
-                "filesize": f.get("filesize"),
-                "url": f.get("url")
-            })
-
-        return {
-            "status": "success",
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
-            "duration": info.get("duration"),
-            "platform": info.get("extractor"),
-            "best_url": info.get("url"),
-            "formats": formats_list
-        }
-
-    except Exception as e:
-        return {"status": "failed", "error": str(e)}
-
-# ================= AUDIO =================
-@app.get("/audio")
-def audio(url: str):
-    try:
-        info = safe_extract(url)
-
-        if not info:
-            return {"status": "failed", "error": "Blocked or not found"}
-
-        return {
-            "status": "success",
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
-            "audio_url": info.get("url")
-        }
-
-    except Exception as e:
-        return {"status": "failed", "error": str(e)}
-
-# ================= DOWNLOAD TASK =================
-def download_task(url: str, file_id: str):
-    try:
-        ydl_opts = get_ydl_opts()
+        ydl_opts = base_opts()
 
         ydl_opts.update({
-            "format": "best",
+            "format": "best[ext=mp4]/best",
             "outtmpl": f"{DOWNLOAD_DIR}/%(title)s.%(ext)s",
             "progress_hooks": [progress_hook]
         })
@@ -225,7 +217,7 @@ def download(url: str, background_tasks: BackgroundTasks):
         "file_id": file_id
     }
 
-# ================= PROGRESS =================
+# ================= CHECK PROGRESS =================
 @app.get("/progress/{file_id}")
 def progress(file_id: str):
     return download_progress.get(file_id, {
