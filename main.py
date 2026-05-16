@@ -22,33 +22,53 @@ def home():
         "message": "Advanced Video Downloader Backend"
     }
 
+# ================= YDL OPTIONS =================
+
 def get_ydl_opts():
+
     return {
+
         "quiet": True,
         "no_warnings": True,
+
         "noplaylist": True,
         "skip_download": True,
+
         "cookiefile": "cookies.txt",
+
         "nocheckcertificate": True,
+
         "extract_flat": False,
+
         "geo_bypass": True,
 
+        # IMPORTANT FIX
+        "format": (
+            "bestvideo[height<=720]+bestaudio/"
+            "best[height<=720]/best"
+        ),
+
         "extractor_args": {
+
             "youtube": {
                 "player_client": ["android"]
             },
+
             "facebook": {
                 "allow_unplayable_formats": ["true"]
             }
         },
 
         "http_headers": {
+
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/137.0.0.0 Safari/537.36"
             ),
-            "Accept-Language": "en-US,en;q=0.9"
+
+            "Accept-Language":
+                "en-US,en;q=0.9"
         }
     }
 
@@ -69,6 +89,7 @@ def extract(url: str):
             )
 
             if not info:
+
                 return {
                     "status": "failed",
                     "error": "Video not found"
@@ -103,6 +124,7 @@ def extract(url: str):
                 })
 
             # BEST FORMAT WITH AUDIO
+
             best_url = ""
 
             for f in reversed(info.get("formats", [])):
@@ -118,6 +140,10 @@ def extract(url: str):
 
                 best_url = f.get("url", "")
                 break
+
+            # FALLBACK
+            if best_url == "":
+                best_url = info.get("url", "")
 
             return {
 
@@ -167,6 +193,23 @@ def audio(url: str):
                 download=False
             )
 
+            audio_url = ""
+
+            # SAFER AUDIO SEARCH
+
+            for f in info.get("formats", []):
+
+                if (
+                    f.get("acodec") != "none"
+                    and f.get("url")
+                ):
+
+                    audio_url = f.get("url")
+                    break
+
+            if audio_url == "":
+                audio_url = info.get("url", "")
+
             return {
 
                 "status": "success",
@@ -178,7 +221,7 @@ def audio(url: str):
                     info.get("thumbnail", ""),
 
                 "audio_url":
-                    info.get("url", "")
+                    audio_url
             }
 
     except Exception as e:
