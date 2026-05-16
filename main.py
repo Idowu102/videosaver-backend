@@ -21,11 +21,11 @@ app.add_middleware(
 def home():
     return {
         "status": "running",
-        "message": "🚀 Production Video Engine Active"
+        "message": "🚀 Stable Video Backend Active"
     }
 
 
-# ================= CORE OPTIONS =================
+# ================= BASE OPTIONS =================
 def base_opts():
     return {
         "quiet": True,
@@ -33,14 +33,17 @@ def base_opts():
         "noplaylist": True,
         "socket_timeout": 60,
 
-        # 🔥 IMPORTANT FIX FOR YOUTUBE
+        # 🔥 YouTube stability fix
+        "format": "bestvideo+bestaudio/best",
+
+        "merge_output_format": "mp4",
+
         "extractor_args": {
             "youtube": {
                 "player_client": ["android", "web", "tv"]
             }
         },
 
-        # 🔥 Better headers (helps bypass bot checks)
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -50,37 +53,19 @@ def base_opts():
             "Accept-Language": "en-US,en;q=0.9",
         },
 
-        # OPTIONAL (UNCOMMENT IF YOU HAVE IT)
+        # OPTIONAL (UNCOMMENT IF YOU ADD cookies.txt)
         # "cookiefile": "cookies.txt",
     }
 
 
-# ================= SAFE EXTRACTOR =================
+# ================= SAFE EXTRACT =================
 def extract_video(url: str):
-    opts = base_opts()
-
-    formats_to_try = [
-        "best[ext=mp4]/best",
-        "best",
-        "bestaudio/best"
-    ]
-
-    last_error = None
-
-    for fmt in formats_to_try:
-        try:
-            opts["format"] = fmt
-
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                data = ydl.extract_info(url, download=False)
-
-                if data:
-                    return data
-
-        except Exception as e:
-            last_error = str(e)
-
-    raise Exception(last_error or "Extraction failed")
+    try:
+        with yt_dlp.YoutubeDL(base_opts()) as ydl:
+            data = ydl.extract_info(url, download=False)
+            return data
+    except Exception as e:
+        raise Exception(f"Extraction failed: {str(e)}")
 
 
 # ================= INFO =================
@@ -110,19 +95,11 @@ def stream(url: str = Query(...)):
     try:
         data = extract_video(url)
 
-        stream_url = None
-
-        # pick best playable format
-        for f in reversed(data.get("formats", [])):
-            if f.get("url") and f.get("vcodec") != "none":
-                stream_url = f["url"]
-                break
-
         return {
             "status": "success",
             "title": data.get("title"),
             "thumbnail": data.get("thumbnail"),
-            "stream_url": stream_url or data.get("url")
+            "stream_url": data.get("url")
         }
 
     except Exception as e:
@@ -142,40 +119,10 @@ def audio(url: str = Query(...)):
         with yt_dlp.YoutubeDL(opts) as ydl:
             data = ydl.extract_info(url, download=False)
 
-        audio_url = None
-
-        for f in data.get("formats", []):
-            if f.get("acodec") != "none" and f.get("url"):
-                audio_url = f["url"]
-
         return {
             "status": "success",
             "title": data.get("title"),
-            "thumbnail": data.get("thumbnail"),
-            "audio_url": audio_url or data.get("url")
-        }
-
-    except Exception as e:
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
-
-
-# ================= EXTRACT (ANDROID SAFE) =================
-@app.get("/extract")
-def extract(url: str = Query(...)):
-    try:
-        data = extract_video(url)
-
-        return {
-            "status": "success",
-            "title": data.get("title"),
-            "thumbnail": data.get("thumbnail"),
-            "duration": data.get("duration"),
-            "stream_url": data.get("url"),
-            "audio_url": data.get("url"),
-            "source": data.get("extractor")
+            "audio_url": data.get("url")
         }
 
     except Exception as e:
