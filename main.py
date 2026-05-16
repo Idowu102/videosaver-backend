@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
+import os
 import socket
-import re
 
 socket.setdefaulttimeout(60)
 
@@ -22,29 +22,27 @@ app.add_middleware(
 def home():
     return {
         "status": "running",
-        "message": "🔥 UPGRADED STREAMING API ACTIVE"
+        "message": "🔥 STABLE STREAMING API ACTIVE"
     }
 
 # ================= CLEAN URL =================
 def clean_url(url: str):
-    # fix shorts + tracking + playlist noise
     url = url.split("&list=")[0]
     url = url.split("&pp=")[0]
-
-    # convert shorts → watch
     url = url.replace("shorts/", "watch?v=")
-
     return url
 
 
-# ================= BASE OPTIONS =================
+# ================= YT-DLP OPTIONS =================
 def ydl_opts():
     return {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
 
-        # 🔥 IMPORTANT: helps bypass bot detection
+        # 🔥 IMPORTANT FIX (BOT BYPASS)
+        "cookiefile": "cookies.txt",   # MUST exist
+
         "extractor_args": {
             "youtube": {
                 "player_client": ["android", "web", "tv"]
@@ -60,37 +58,31 @@ def ydl_opts():
             "Accept-Language": "en-US,en;q=0.9",
         },
 
-        # 🔥 fallback retries
         "retries": 10,
         "fragment_retries": 10,
-        "concurrent_fragment_downloads": 5,
     }
 
 
-# ================= SAFE EXTRACT (CORE FIX) =================
+# ================= SAFE EXTRACT =================
 def safe_extract(url: str):
 
     url = clean_url(url)
 
-    formats_to_try = [
+    formats = [
         "bestvideo+bestaudio/best",
         "best[ext=mp4]/best",
         "best",
-        "worst",  # fallback if restricted
     ]
 
     last_error = None
 
-    for fmt in formats_to_try:
+    for f in formats:
         try:
             opts = ydl_opts()
-            opts["format"] = fmt
+            opts["format"] = f
 
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-
-                if info:
-                    return info
+                return ydl.extract_info(url, download=False)
 
         except Exception as e:
             last_error = str(e)
@@ -108,14 +100,11 @@ def info(url: str):
             "status": "success",
             "title": data.get("title"),
             "thumbnail": data.get("thumbnail"),
-            "duration": data.get("duration"),
+            "duration": data.get("duration")
         }
 
     except Exception as e:
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
+        return {"status": "failed", "error": str(e)}
 
 
 # ================= STREAM =================
@@ -126,7 +115,6 @@ def stream(url: str):
 
         stream_url = data.get("url")
 
-        # fallback from formats
         if not stream_url:
             for f in data.get("formats", []):
                 if f.get("url") and f.get("vcodec") != "none":
@@ -141,10 +129,7 @@ def stream(url: str):
         }
 
     except Exception as e:
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
+        return {"status": "failed", "error": str(e)}
 
 
 # ================= AUDIO =================
@@ -169,7 +154,4 @@ def audio(url: str):
         }
 
     except Exception as e:
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
+        return {"status": "failed", "error": str(e)}
