@@ -7,6 +7,7 @@ socket.setdefaulttimeout(60)
 
 app = FastAPI()
 
+# ================= CORS =================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,19 +16,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ================= HOME =================
 @app.get("/")
 def home():
-    return {"status": "running", "message": "API active"}
+    return {
+        "status": "running",
+        "message": "Video Saver API Working"
+    }
 
-# ================= OPTIONS =================
-def opts():
+# ================= BASE OPTIONS =================
+def base_opts():
     return {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "nocheckcertificate": True,
+        "geo_bypass": True,
+        "socket_timeout": 60,
 
-        # IMPORTANT FIX
         "extractor_args": {
             "youtube": {
                 "player_client": ["android", "web"]
@@ -35,62 +41,104 @@ def opts():
         },
 
         "http_headers": {
-            "User-Agent": "Mozilla/5.0"
-        }
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
     }
 
-def extract(url: str):
-    with yt_dlp.YoutubeDL(opts()) as ydl:
-        return ydl.extract_info(url, download=False)
+# ================= CLEAN URL =================
+def clean_url(url: str):
+    if "&" in url:
+        url = url.split("&")[0]
+    if "?si=" in url:
+        url = url.split("?si=")[0]
+    return url
+
+# ================= SAFE EXTRACT =================
+def safe_extract(url: str):
+    url = clean_url(url)
+
+    with yt_dlp.YoutubeDL(base_opts()) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    return info
 
 # ================= INFO =================
 @app.get("/info")
 def info(url: str = Query(...)):
     try:
-        data = extract(url)
+        info = safe_extract(url)
 
         return {
             "status": "success",
-            "title": data.get("title"),
-            "thumbnail": data.get("thumbnail"),
-            "duration": data.get("duration")
+            "title": info.get("title"),
+            "thumbnail": info.get("thumbnail"),
+            "duration": info.get("duration"),
+            "platform": info.get("extractor")
         }
 
     except Exception as e:
-        return {"status": "failed", "error": str(e)}
+        return {
+            "status": "failed",
+            "error": str(e)
+        }
 
-# ================= STREAM =================
-@app.get("/stream")
-def stream(url: str = Query(...)):
+# ================= EXTRACT =================
+@app.get("/extract")
+def extract(url: str = Query(...)):
     try:
-        data = extract(url)
+        info = safe_extract(url)
 
-        # yt-dlp already gives best playable URL
+        best_url = info.get("url", "")
+
+        for f in info.get("formats", []):
+            if f.get("url") and f.get("vcodec") != "none":
+                best_url = f["url"]
+
         return {
             "status": "success",
-            "title": data.get("title"),
-            "stream_url": data.get("url"),
-            "thumbnail": data.get("thumbnail")
+            "title": info.get("title"),
+            "thumbnail": info.get("thumbnail"),
+            "duration": info.get("duration"),
+            "best_download": best_url,
+            "platform": info.get("extractor")
         }
 
     except Exception as e:
-        return {"status": "failed", "error": str(e)}
+        return {
+            "status": "failed",
+            "error": str(e)
+        }
 
 # ================= AUDIO =================
 @app.get("/audio")
 def audio(url: str = Query(...)):
     try:
-        ydl_opts = opts()
-        ydl_opts["format"] = "bestaudio"
+        opts = base_opts()
+        opts["format"] = "bestaudio/best"
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            data = ydl.extract_info(url, download=False)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(clean_url(url), download=False)
+
+        audio_url = info.get("url", "")
+
+        for f in info.get("formats", []):
+            if f.get("acodec") != "none" and f.get("url"):
+                audio_url = f["url"]
 
         return {
             "status": "success",
-            "title": data.get("title"),
-            "audio_url": data.get("url")
+            "title": info.get("title"),
+            "thumbnail": info.get("thumbnail"),
+            "audio_url": audio_url
         }
 
     except Exception as e:
-        return {"status": "failed", "error": str(e)}
+        return {
+            "status": "failed",
+            "error": str(e)
+        }
