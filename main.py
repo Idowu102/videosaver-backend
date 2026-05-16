@@ -81,43 +81,11 @@ def base_opts():
 
 def safe_extract(url):
 
-    modes = [
+    opts = base_opts()
+    opts["format"] = "best"
 
-        "best",
-
-        "best[ext=mp4]/best",
-
-        "bestaudio/best",
-    ]
-
-    last_error = None
-
-    for fmt in modes:
-
-        try:
-
-            opts = base_opts()
-
-            opts["format"] = fmt
-
-            with yt_dlp.YoutubeDL(opts) as ydl:
-
-                info = ydl.extract_info(
-                    url,
-                    download=False
-                )
-
-                if info:
-                    return info
-
-        except Exception as e:
-
-            last_error = str(e)
-
-            time.sleep(1)
-
-    raise Exception(last_error or "Unable to extract video")
-
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False)
 # ================= INFO =================
 
 @app.get("/info")
@@ -163,50 +131,20 @@ def stream(url: str):
 
         info = safe_extract(url)
 
-        best_url = ""
-
-        for f in reversed(info.get("formats", [])):
-
-            if not f.get("url"):
-                continue
-
-            # skip broken formats
-            if f.get("acodec") == "none":
-                continue
-
-            best_url = f.get("url")
-
-            break
-
-        if best_url == "":
-
-            best_url = info.get("url", "")
+        stream_url = info.get("url")
 
         return {
-
             "status": "success",
-
-            "title":
-                info.get("title"),
-
-            "thumbnail":
-                info.get("thumbnail"),
-
-            "duration":
-                info.get("duration"),
-
-            "stream_url":
-                best_url
+            "title": info.get("title"),
+            "thumbnail": info.get("thumbnail"),
+            "duration": info.get("duration"),
+            "stream_url": stream_url
         }
 
     except Exception as e:
-
         return {
-
             "status": "failed",
-
-            "error":
-                str(e)
+            "error": str(e)
         }
 
 # ================= AUDIO =================
@@ -217,48 +155,23 @@ def audio(url: str):
     try:
 
         opts = base_opts()
-
-        opts["format"] = "bestaudio/best"
+        opts["format"] = "bestaudio"
 
         with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
 
-            info = ydl.extract_info(
-                url,
-                download=False
-            )
+        return {
+            "status": "success",
+            "title": info.get("title"),
+            "thumbnail": info.get("thumbnail"),
+            "audio_url": info.get("url")
+        }
 
-            audio_url = ""
-
-            for f in reversed(info.get("formats", [])):
-
-                if not f.get("url"):
-                    continue
-
-                if f.get("acodec") == "none":
-                    continue
-
-                audio_url = f.get("url")
-
-                break
-
-            if audio_url == "":
-
-                audio_url = info.get("url", "")
-
-            return {
-
-                "status": "success",
-
-                "title":
-                    info.get("title"),
-
-                "thumbnail":
-                    info.get("thumbnail"),
-
-                "audio_url":
-                    audio_url
-            }
-
+    except Exception as e:
+        return {
+            "status": "failed",
+            "error": str(e)
+        }
     except Exception as e:
 
         return {
