@@ -68,8 +68,8 @@ def get_ydl_opts():
             "youtube": {
 
                 "player_client": [
-                    "android",
-                    "web"
+    "web",
+    "android"
                 ]
             }
         }
@@ -84,7 +84,7 @@ def extract(url: str):
 
         ydl_opts = get_ydl_opts()
 
-        ydl_opts["format"] = (
+        ydl_opts["format"] = "bv*+ba/b"
             "bestvideo[height<=720]+bestaudio/"
             "best[height<=720]/best"
         )
