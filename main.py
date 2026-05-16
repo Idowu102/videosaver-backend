@@ -21,8 +21,12 @@ app.add_middleware(
 def home():
     return {
         "status": "running",
-        "message": "Video Saver API Working"
+        "message": "🔥 YouTube-Resistant Streaming API"
     }
+
+# ================= CLEAN URL =================
+def clean_url(url: str):
+    return url.split("&")[0].split("?si=")[0]
 
 # ================= BASE OPTIONS =================
 def base_opts():
@@ -32,116 +36,136 @@ def base_opts():
         "noplaylist": True,
         "nocheckcertificate": True,
         "geo_bypass": True,
-        "socket_timeout": 60,
 
-        # USE COOKIES
+        # 🔥 IMPORTANT (BYPASS LEVEL 1)
         "cookiefile": "cookies.txt",
 
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "web"]
+                "player_client": ["android", "web", "tv"]
             }
         },
 
         "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/122.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.9",
-        },
+            "User-Agent": "Mozilla/5.0",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
     }
 
-# ================= CLEAN URL =================
-def clean_url(url: str):
-    if "&" in url:
-        url = url.split("&")[0]
-    if "?si=" in url:
-        url = url.split("?si=")[0]
-    return url
-
-# ================= SAFE EXTRACT =================
-def safe_extract(url: str):
+# ================= CORE EXTRACT (WITH FALLBACKS) =================
+def extract_video(url: str):
     url = clean_url(url)
 
-    with yt_dlp.YoutubeDL(base_opts()) as ydl:
-        info = ydl.extract_info(url, download=False)
+    strategies = [
+        # Strategy 1 (best)
+        {
+            "format": "best",
+            "extractor_args": {"youtube": {"player_client": ["android", "web"]}}
+        },
 
-    return info
+        # Strategy 2 (android only)
+        {
+            "format": "best",
+            "extractor_args": {"youtube": {"player_client": ["android"]}}
+        },
+
+        # Strategy 3 (audio fallback)
+        {
+            "format": "bestaudio/best",
+            "extractor_args": {"youtube": {"player_client": ["android", "web"]}}
+        }
+    ]
+
+    last_error = None
+
+    for s in strategies:
+        try:
+            opts = base_opts()
+            opts.update(s)
+
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=False)
+
+        except Exception as e:
+            last_error = str(e)
+
+    raise Exception(last_error or "Extraction failed")
 
 # ================= INFO =================
 @app.get("/info")
 def info(url: str = Query(...)):
     try:
-        info = safe_extract(url)
+        data = extract_video(url)
 
         return {
             "status": "success",
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
-            "duration": info.get("duration"),
-            "platform": info.get("extractor")
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "duration": data.get("duration"),
+            "platform": data.get("extractor")
         }
 
     except Exception as e:
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
+        return {"status": "failed", "error": str(e)}
 
-# ================= EXTRACT =================
-@app.get("/extract")
-def extract(url: str = Query(...)):
+# ================= STREAM =================
+@app.get("/stream")
+def stream(url: str = Query(...)):
     try:
-        info = safe_extract(url)
+        data = extract_video(url)
 
-        best_url = info.get("url", "")
+        stream_url = data.get("url")
 
-        for f in info.get("formats", []):
-            if f.get("url") and f.get("vcodec") != "none":
-                best_url = f["url"]
+        # fallback search inside formats
+        for f in data.get("formats", []):
+            if f.get("url") and f.get("acodec") != "none":
+                stream_url = f["url"]
 
         return {
             "status": "success",
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
-            "duration": info.get("duration"),
-            "best_download": best_url,
-            "platform": info.get("extractor")
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "stream_url": stream_url
         }
 
     except Exception as e:
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
+        return {"status": "failed", "error": str(e)}
 
 # ================= AUDIO =================
 @app.get("/audio")
 def audio(url: str = Query(...)):
     try:
-        opts = base_opts()
-        opts["format"] = "bestaudio/best"
+        data = extract_video(url)
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(clean_url(url), download=False)
+        audio_url = data.get("url")
 
-        audio_url = info.get("url", "")
-
-        for f in info.get("formats", []):
+        for f in data.get("formats", []):
             if f.get("acodec") != "none" and f.get("url"):
                 audio_url = f["url"]
 
         return {
             "status": "success",
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
             "audio_url": audio_url
         }
 
     except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+# ================= BACKWARD COMPATIBILITY =================
+@app.get("/extract")
+def extract(url: str = Query(...)):
+    try:
+        data = extract_video(url)
+
         return {
-            "status": "failed",
-            "error": str(e)
+            "status": "success",
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "stream_url": data.get("url"),
+            "audio_url": data.get("url")
         }
+
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
