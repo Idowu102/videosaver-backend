@@ -2,13 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
 import socket
-import re
-import requests
 
 socket.setdefaulttimeout(120)
 
 app = FastAPI()
 
+# ================= CORS =================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,56 +16,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ================= HOME =================
 @app.get("/")
 def home():
     return {
         "status": "running",
-        "engine": "Stable Download Engine v1"
+        "engine": "Pro Stable Engine v2"
     }
 
 
-# ================= CLEAN URL =================
-def clean_url(url: str):
-    url = url.strip()
-
-    if "&list=" in url:
-        url = url.split("&list=")[0]
-
-    if "youtube.com/shorts/" in url:
-        vid = url.split("/shorts/")[1].split("?")[0]
-        url = f"https://www.youtube.com/watch?v={vid}"
-
-    return url
-
-
 # ================= OPTIONS =================
-def ydl_opts():
+def opts():
     return {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "format": "best",
-        "geo_bypass": True,
         "socket_timeout": 120,
-        "retries": 5,
+        "retries": 10,
         "http_headers": {
             "User-Agent": "Mozilla/5.0",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
+        }
     }
 
 
-# ================= CORE EXTRACT =================
-def extract_info(url: str):
-    url = clean_url(url)
-
-    with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
+# ================= CORE =================
+def extract(url: str):
+    with yt_dlp.YoutubeDL(opts()) as ydl:
         info = ydl.extract_info(url, download=False)
 
         if not info:
-            raise Exception("No info found")
+            raise Exception("No data")
 
-        # direct file (facebook, mp4, etc.)
+        # direct file (Facebook, mp4, etc.)
         if info.get("url") and not info.get("formats"):
             return {
                 "title": info.get("title"),
@@ -74,8 +56,8 @@ def extract_info(url: str):
                 "url": info.get("url")
             }
 
-        # formats fallback
-        for f in reversed(info.get("formats", [])):
+        # best format loop
+        for f in info.get("formats", []):
             if f.get("url"):
                 return {
                     "title": info.get("title"),
@@ -90,10 +72,11 @@ def extract_info(url: str):
         }
 
 
+# ================= STREAM =================
 @app.get("/extract")
-def extract(url: str):
+def extract_route(url: str):
     try:
-        data = extract_info(url)
+        data = extract(url)
         return {
             "status": "success",
             "title": data["title"],
@@ -104,10 +87,11 @@ def extract(url: str):
         return {"status": "failed", "error": str(e)}
 
 
+# ================= AUDIO =================
 @app.get("/audio")
-def audio(url: str):
+def audio_route(url: str):
     try:
-        data = extract_info(url)
+        data = extract(url)
         return {
             "status": "success",
             "title": data["title"],
