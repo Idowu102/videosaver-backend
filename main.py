@@ -163,11 +163,11 @@ def safe_extract(url, audio=False):
     else:
 
         formats = [
-            "best[height<=720]",
-            "best",
-            "18",
-            "22"
-        ]
+    "18",   # 360p mp4 + audio
+    "22",   # 720p mp4 + audio
+    "best[ext=mp4]",
+    "best"
+]
 
     last_error = None
 
