@@ -1,296 +1,314 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-import yt_dlp
-import socket
-import re
-import requests
+package com.idchest.videosaverapp
 
-socket.setdefaulttimeout(120)
+import android.content.ContentValues
+import android.content.Intent
+import android.net.Uri
+import android.os.*
+import android.provider.MediaStore
+import android.widget.*
+import androidx.appcompat.app.AppCompatActivity
+import com.bumptech.glide.Glide
+import com.google.android.gms.ads.*
+import com.google.android.gms.ads.interstitial.InterstitialAd
+import com.google.android.gms.ads.interstitial.InterstitialAdLoadCallback
+import okhttp3.*
+import org.json.JSONObject
+import java.io.IOException
+import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
 
-app = FastAPI()
+class MainActivity : AppCompatActivity() {
 
-# ================= CORS =================
+    // ================= NETWORK =================
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .build()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    // ================= UI =================
+    private lateinit var input: EditText
+    private lateinit var titleText: TextView
+    private lateinit var progressBar: ProgressBar
+    private lateinit var progressText: TextView
+    private lateinit var thumb: ImageView
+    private lateinit var downloadBtn: Button
+    private lateinit var audioBtn: Button
 
-# ================= HOME =================
+    // ================= DATA =================
+    private var downloadUrl: String = ""
+    private var audioUrl: String = ""
+    private var title: String = ""
 
-@app.get("/")
-def home():
-    return {
-        "status": "running",
-        "engine": "Production Hybrid Engine",
-        "youtube": "optimized"
-    }
+    // ================= ADS =================
+    private var interstitialAd: InterstitialAd? = null
 
-# ================= URL CLEANER =================
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
 
-def clean_url(url: str):
+        MobileAds.initialize(this)
+        loadInterstitialAd()
 
-    url = url.strip()
+        input = findViewById(R.id.urlInput)
+        titleText = findViewById(R.id.titleText)
+        progressBar = findViewById(R.id.progressBar)
+        progressText = findViewById(R.id.progressText)
+        thumb = findViewById(R.id.thumbImage)
+        downloadBtn = findViewById(R.id.downloadBtn)
+        audioBtn = findViewById(R.id.audioBtn)
 
-    if "&list=" in url:
-        url = url.split("&list=")[0]
+        // 🔒 LOCK DOWNLOAD BUTTON INITIALLY
+        downloadBtn.isEnabled = false
+        audioBtn.isEnabled = false
 
-    if "&pp=" in url:
-        url = url.split("&pp=")[0]
+        findViewById<Button>(R.id.fetchBtn).setOnClickListener {
 
-    if "youtube.com/shorts/" in url:
+            val url = input.text.toString().trim()
 
-        video_id = url.split("/shorts/")[1].split("?")[0]
+            if (url.isEmpty()) {
+                Toast.makeText(this, "Paste URL first", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
 
-        url = f"https://www.youtube.com/watch?v={video_id}"
+            // reset state
+            downloadUrl = ""
+            audioUrl = ""
+            downloadBtn.isEnabled = false
+            audioBtn.isEnabled = false
 
-    return url
+            fetchVideo(url)
+            fetchAudio(url)
 
-# ================= GET VIDEO ID =================
+            showAd()
+        }
 
-def get_video_id(url):
+        downloadBtn.setOnClickListener {
+            if (downloadUrl.isNotEmpty()) {
+                downloadFile(downloadUrl, "$title.mp4")
+                showAd()
+            } else {
+                Toast.makeText(this, "Video not ready", Toast.LENGTH_SHORT).show()
+            }
+        }
 
-    patterns = [
-        r"v=([a-zA-Z0-9_-]{11})",
-        r"youtu\.be/([a-zA-Z0-9_-]{11})",
-        r"shorts/([a-zA-Z0-9_-]{11})",
-    ]
-
-    for pattern in patterns:
-
-        match = re.search(pattern, url)
-
-        if match:
-            return match.group(1)
-
-    return None
-
-# ================= YT OPTIONS =================
-
-def yt_opts(format_type="best"):
-
-    return {
-
-        "quiet": True,
-        "no_warnings": True,
-        "nocheckcertificate": True,
-        "ignoreerrors": True,
-        "geo_bypass": True,
-        "retries": 10,
-        "fragment_retries": 10,
-        "socket_timeout": 120,
-        "noplaylist": True,
-        "extract_flat": False,
-        "format": format_type,
-
-        # IMPORTANT
-        "cookiefile": "cookies.txt",
-
-        "http_headers": {
-
-            "User-Agent":
-                "com.google.android.youtube/19.09.37 (Linux; U; Android 11)",
-
-            "Accept-Language":
-                "en-US,en;q=0.9",
-        },
-
-        "extractor_args": {
-
-            "youtube": {
-
-                "player_client": [
-                    "android",
-                    "ios",
-                    "web",
-                    "tv_embedded"
-                ],
-
-                "player_skip": [
-                    "configs",
-                    "webpage"
-                ]
+        audioBtn.setOnClickListener {
+            if (audioUrl.isNotEmpty()) {
+                downloadFile(audioUrl, "$title.mp3")
+                showAd()
+            } else {
+                Toast.makeText(this, "Audio not ready", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-# ================= YOUTUBE FALLBACK =================
+    // ================= ADS =================
+    private fun loadInterstitialAd() {
+        InterstitialAd.load(
+            this,
+            "ca-app-pub-5425962691180386/1619020807",
+            AdRequest.Builder().build(),
+            object : InterstitialAdLoadCallback() {
+                override fun onAdLoaded(ad: InterstitialAd) {
+                    interstitialAd = ad
+                }
 
-def youtube_fallback(video_id):
+                override fun onAdFailedToLoad(error: LoadAdError) {
+                    interstitialAd = null
+                }
+            }
+        )
+    }
 
-    try:
+    private fun showAd() {
+        interstitialAd?.show(this)
+        interstitialAd = null
+        loadInterstitialAd()
+    }
 
-        url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+    // ================= FETCH VIDEO =================
+    private fun fetchVideo(url: String) {
 
-        r = requests.get(url, timeout=20)
+        val encoded = URLEncoder.encode(url, "UTF-8")
 
-        if r.status_code != 200:
-            return None
+        val request = Request.Builder()
+            .url("https://videosaver-backend-production.up.railway.app/stream?url=$encoded")
+            .build()
 
-        data = r.json()
+        client.newCall(request).enqueue(object : Callback {
 
-        thumb = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+            override fun onFailure(call: Call, e: IOException) {
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Network error", Toast.LENGTH_SHORT).show()
+                }
+            }
 
-        return {
-            "title": data.get("title", "YouTube Video"),
-            "thumbnail": thumb,
-            "duration": 0,
-            "url": f"https://www.youtube.com/watch?v={video_id}"
-        }
+            override fun onResponse(call: Call, response: Response) {
 
-    except:
-        return None
+                val body = response.body?.string()
 
-# ================= SAFE EXTRACT =================
+                runOnUiThread {
 
-def safe_extract(url, audio=False):
+                    try {
+                        val json = JSONObject(body ?: "{}")
 
-    url = clean_url(url)
-
-    formats = []
-
-    if audio:
-
-        formats = [
-            "bestaudio[ext=m4a]",
-            "bestaudio",
-            "best"
-        ]
-
-    else:
-
-        formats = [
-            "best[height<=720]",
-            "best",
-            "18",
-            "22"
-        ]
-
-    last_error = None
-
-    for fmt in formats:
-
-        try:
-
-            opts = yt_opts(fmt)
-
-            with yt_dlp.YoutubeDL(opts) as ydl:
-
-                info = ydl.extract_info(url, download=False)
-
-                if info:
-
-                    if info.get("url"):
-                        return info
-
-                    formats_data = info.get("formats", [])
-
-                    for f in reversed(formats_data):
-
-                        if not f.get("url"):
-                            continue
-
-                        if audio and f.get("acodec") == "none":
-                            continue
-
-                        return {
-                            "title": info.get("title"),
-                            "thumbnail": info.get("thumbnail"),
-                            "duration": info.get("duration"),
-                            "url": f.get("url")
+                        if (json.optString("status") != "success") {
+                            Toast.makeText(
+                                this@MainActivity,
+                                json.optString("error", "Fetch failed"),
+                                Toast.LENGTH_LONG
+                            ).show()
+                            return@runOnUiThread
                         }
 
-        except Exception as e:
+                        val url = json.optString("stream_url")
+                        if (url.isEmpty()) {
+                            Toast.makeText(this@MainActivity, "No video link", Toast.LENGTH_LONG).show()
+                            return@runOnUiThread
+                        }
 
-            last_error = str(e)
-            continue
+                        downloadUrl = url
+                        title = json.optString("title")
 
-    video_id = get_video_id(url)
+                        titleText.text = title
 
-    if video_id:
+                        Glide.with(this@MainActivity)
+                            .load(json.optString("thumbnail"))
+                            .into(thumb)
 
-        fallback = youtube_fallback(video_id)
+                        downloadBtn.isEnabled = true
 
-        if fallback:
-            return fallback
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Video ready",
+                            Toast.LENGTH_SHORT
+                        ).show()
 
-    raise Exception(last_error or "Extraction failed")
+                    } catch (e: Exception) {
+                        Toast.makeText(this@MainActivity, "Parse error", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        })
+    }
 
-# ================= EXTRACT =================
+    // ================= FETCH AUDIO =================
+    private fun fetchAudio(url: String) {
 
-@app.get("/extract")
-def extract(url: str):
+        val encoded = URLEncoder.encode(url, "UTF-8")
 
-    try:
+        val request = Request.Builder()
+            .url("https://videosaver-backend-production.up.railway.app/audio?url=$encoded")
+            .build()
 
-        info = safe_extract(url)
+        client.newCall(request).enqueue(object : Callback {
 
-        video_url = info.get("url")
+            override fun onFailure(call: Call, e: IOException) {}
 
-        return {
-            "status": "success",
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
-            "duration": info.get("duration"),
+            override fun onResponse(call: Call, response: Response) {
 
-            # FIX
-            "best_download": video_url,
-            "stream_url": video_url
-        }
+                val body = response.body?.string()
 
-    except Exception as e:
+                runOnUiThread {
 
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
+                    try {
+                        val json = JSONObject(body ?: "{}")
 
-# ================= STREAM =================
+                        val url = json.optString("audio_url")
 
-@app.get("/stream")
-def stream(url: str):
+                        if (url.isNotEmpty()) {
+                            audioUrl = url
+                            audioBtn.isEnabled = true
+                        }
 
-    try:
+                    } catch (_: Exception) {}
+                }
+            }
+        })
+    }
 
-        info = safe_extract(url)
+    // ================= DOWNLOAD ENGINE =================
+    private fun downloadFile(url: String, fileName: String) {
 
-        return {
-            "status": "success",
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
-            "duration": info.get("duration"),
-            "stream_url": info.get("url")
-        }
+        progressBar.progress = 0
+        progressText.text = "0%"
 
-    except Exception as e:
+        Thread {
 
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
+            try {
 
-# ================= AUDIO =================
+                val request = Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
 
-@app.get("/audio")
-def audio(url: str):
+                if (!response.isSuccessful) {
+                    throw Exception("HTTP ${response.code}")
+                }
 
-    try:
+                val body = response.body ?: throw Exception("Empty response")
 
-        info = safe_extract(url, audio=True)
+                val inputStream = body.byteStream()
+                val fileSize = body.contentLength()
 
-        return {
-            "status": "success",
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
-            "audio_url": info.get("url")
-        }
+                val resolver = contentResolver
 
-    except Exception as e:
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE,
+                        if (fileName.endsWith(".mp3")) "audio/mpeg" else "video/mp4"
+                    )
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/VideoSaver")
+                }
 
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
+                val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+
+                val uri: Uri = resolver.insert(collection, values)
+                    ?: throw Exception("File creation failed")
+
+                val outputStream = resolver.openOutputStream(uri)
+                    ?: throw Exception("Stream error")
+
+                val buffer = ByteArray(8192)
+                var bytesRead: Int
+                var total: Long = 0
+
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    outputStream.write(buffer, 0, bytesRead)
+                    total += bytesRead
+
+                    if (fileSize > 0) {
+                        val progress = ((total * 100) / fileSize).toInt()
+                        runOnUiThread {
+                            progressBar.progress = progress
+                            progressText.text = "$progress%"
+                        }
+                    }
+                }
+
+                outputStream.flush()
+                outputStream.close()
+                inputStream.close()
+
+                runOnUiThread {
+                    progressBar.progress = 100
+                    progressText.text = "100%"
+
+                    Toast.makeText(this, "Download complete", Toast.LENGTH_LONG).show()
+
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, if (fileName.endsWith(".mp3")) "audio/*" else "video/*")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+
+                    startActivity(intent)
+                }
+
+            } catch (e: Exception) {
+
+                runOnUiThread {
+                    Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+
+        }.start()
+    }
+}
