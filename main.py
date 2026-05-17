@@ -1,14 +1,17 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
 import socket
-import time
+import re
+import requests
+from urllib.parse import urlparse, parse_qs
 
-socket.setdefaulttimeout(60)
+socket.setdefaulttimeout(120)
 
 app = FastAPI()
 
 # ================= CORS =================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,119 +21,351 @@ app.add_middleware(
 )
 
 # ================= HOME =================
+
 @app.get("/")
 def home():
     return {
         "status": "running",
-        "message": "🔥 Video Saver API Active"
+        "engine": "Production Hybrid Engine",
+        "youtube": "optimized"
     }
 
-# ================= BASE OPTIONS =================
-def base_opts():
-    return {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "nocheckcertificate": True,
-        "geo_bypass": True,
-        "socket_timeout": 60,
+# ================= URL CLEANER =================
 
-        # safer YouTube mode
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "web"]
-            }
+def clean_url(url: str):
+
+    url = url.strip()
+
+    # remove playlist
+    if "&list=" in url:
+        url = url.split("&list=")[0]
+
+    # remove tracking
+    if "&pp=" in url:
+        url = url.split("&pp=")[0]
+
+    # shorts -> watch
+    if "youtube.com/shorts/" in url:
+
+        video_id = url.split("/shorts/")[1].split("?")[0]
+
+        url = f"https://www.youtube.com/watch?v={video_id}"
+
+    return url
+
+# ================= GET VIDEO ID =================
+
+def get_video_id(url):
+
+    patterns = [
+
+        r"v=([a-zA-Z0-9_-]{11})",
+
+        r"youtu\.be/([a-zA-Z0-9_-]{11})",
+
+        r"shorts/([a-zA-Z0-9_-]{11})",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(pattern, url)
+
+        if match:
+            return match.group(1)
+
+    return None
+
+# ================= YT OPTIONS =================
+
+def yt_opts(format_type="best"):
+
+    return {
+
+        "quiet": True,
+
+        "no_warnings": True,
+
+        "nocheckcertificate": True,
+
+        "ignoreerrors": True,
+
+        "geo_bypass": True,
+
+        "retries": 10,
+
+        "fragment_retries": 10,
+
+        "socket_timeout": 120,
+
+        "noplaylist": True,
+
+        "extract_flat": False,
+
+        "format": format_type,
+
+        "http_headers": {
+
+            "User-Agent":
+                "com.google.android.youtube/19.09.37 "
+                "(Linux; U; Android 11)",
+
+            "Accept-Language":
+                "en-US,en;q=0.9",
         },
 
-        "retries": 3,
+        "extractor_args": {
+
+            "youtube": {
+
+                "player_client": [
+                    "android",
+                    "ios",
+                    "web",
+                    "tv_embedded"
+                ],
+
+                "player_skip": [
+                    "configs",
+                    "webpage"
+                ]
+            }
+        }
     }
 
-# ================= SAFE EXTRACT =================
-def safe_extract(url):
-    opts = base_opts()
-    opts["format"] = "best"
+# ================= YOUTUBE FALLBACK =================
+
+def youtube_fallback(video_id):
 
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download=False)
-    except Exception as e:
-        raise Exception(str(e))
 
-# ================= INFO =================
-@app.get("/info")
-def info(url: str = Query(...)):
-    try:
-        data = safe_extract(url)
+        url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+
+        r = requests.get(url, timeout=20)
+
+        if r.status_code != 200:
+            return None
+
+        data = r.json()
+
+        thumb = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
         return {
+
+            "title": data.get("title", "YouTube Video"),
+
+            "thumbnail": thumb,
+
+            "duration": 0,
+
+            "url": f"https://www.youtube.com/watch?v={video_id}"
+        }
+
+    except:
+        return None
+
+# ================= SAFE EXTRACT =================
+
+def safe_extract(url, audio=False):
+
+    url = clean_url(url)
+
+    formats = []
+
+    if audio:
+
+        formats = [
+
+            "bestaudio[ext=m4a]",
+
+            "bestaudio",
+
+            "best",
+        ]
+
+    else:
+
+        formats = [
+
+            "best[height<=720]",
+
+            "best",
+
+            "18",
+
+            "22",
+        ]
+
+    last_error = None
+
+    for fmt in formats:
+
+        try:
+
+            opts = yt_opts(fmt)
+
+            with yt_dlp.YoutubeDL(opts) as ydl:
+
+                info = ydl.extract_info(
+                    url,
+                    download=False
+                )
+
+                if info:
+
+                    # direct url
+                    if info.get("url"):
+                        return info
+
+                    # formats
+                    formats_data = info.get("formats", [])
+
+                    for f in reversed(formats_data):
+
+                        if not f.get("url"):
+                            continue
+
+                        if audio:
+
+                            if f.get("acodec") == "none":
+                                continue
+
+                        return {
+
+                            "title":
+                                info.get("title"),
+
+                            "thumbnail":
+                                info.get("thumbnail"),
+
+                            "duration":
+                                info.get("duration"),
+
+                            "url":
+                                f.get("url")
+                        }
+
+        except Exception as e:
+
+            last_error = str(e)
+
+            continue
+
+    # fallback mode
+    video_id = get_video_id(url)
+
+    if video_id:
+
+        fallback = youtube_fallback(video_id)
+
+        if fallback:
+            return fallback
+
+    raise Exception(last_error or "Extraction failed")
+
+# ================= EXTRACT =================
+
+@app.get("/extract")
+def extract(url: str):
+
+    try:
+
+        info = safe_extract(url)
+
+        return {
+
             "status": "success",
-            "title": data.get("title"),
-            "thumbnail": data.get("thumbnail"),
-            "duration": data.get("duration"),
-            "extractor": data.get("extractor")
+
+            "title":
+                info.get("title"),
+
+            "thumbnail":
+                info.get("thumbnail"),
+
+            "duration":
+                info.get("duration"),
+
+            "stream_url":
+                info.get("url")
         }
 
     except Exception as e:
+
         return {
+
             "status": "failed",
-            "error": str(e)
+
+            "error":
+                str(e)
         }
 
 # ================= STREAM =================
+
 @app.get("/stream")
-def stream(url: str = Query(...)):
+def stream(url: str):
+
     try:
-        data = safe_extract(url)
 
-        stream_url = data.get("url")
-
-        # fallback: formats loop
-        if not stream_url and "formats" in data:
-            for f in reversed(data["formats"]):
-                if f.get("url"):
-                    stream_url = f["url"]
-                    break
+        info = safe_extract(url)
 
         return {
+
             "status": "success",
-            "title": data.get("title"),
-            "thumbnail": data.get("thumbnail"),
-            "stream_url": stream_url
+
+            "title":
+                info.get("title"),
+
+            "thumbnail":
+                info.get("thumbnail"),
+
+            "duration":
+                info.get("duration"),
+
+            "stream_url":
+                info.get("url")
         }
 
     except Exception as e:
+
         return {
+
             "status": "failed",
-            "error": str(e)
+
+            "error":
+                str(e)
         }
 
 # ================= AUDIO =================
+
 @app.get("/audio")
-def audio(url: str = Query(...)):
+def audio(url: str):
+
     try:
-        opts = base_opts()
-        opts["format"] = "bestaudio/best"
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            data = ydl.extract_info(url, download=False)
-
-        audio_url = data.get("url")
-
-        if not audio_url and "formats" in data:
-            for f in reversed(data["formats"]):
-                if f.get("acodec") != "none" and f.get("url"):
-                    audio_url = f["url"]
-                    break
+        info = safe_extract(
+            url,
+            audio=True
+        )
 
         return {
+
             "status": "success",
-            "title": data.get("title"),
-            "thumbnail": data.get("thumbnail"),
-            "audio_url": audio_url
+
+            "title":
+                info.get("title"),
+
+            "thumbnail":
+                info.get("thumbnail"),
+
+            "audio_url":
+                info.get("url")
         }
 
     except Exception as e:
+
         return {
+
             "status": "failed",
-            "error": str(e)
+
+            "error":
+                str(e)
         }
