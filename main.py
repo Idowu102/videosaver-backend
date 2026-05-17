@@ -42,7 +42,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         MobileAds.initialize(this)
-        loadInterstitialAd()
+        loadAd()
 
         input = findViewById(R.id.urlInput)
         titleText = findViewById(R.id.titleText)
@@ -52,6 +52,7 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.fetchBtn).setOnClickListener {
             val url = input.text.toString().trim()
+
             if (url.isEmpty()) {
                 Toast.makeText(this, "Paste URL", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
@@ -83,7 +84,7 @@ class MainActivity : AppCompatActivity() {
 
     // ================= ADS =================
 
-    private fun loadInterstitialAd() {
+    private fun loadAd() {
         InterstitialAd.load(
             this,
             "ca-app-pub-5425962691180386/1619020807",
@@ -103,7 +104,7 @@ class MainActivity : AppCompatActivity() {
     private fun showAd() {
         interstitialAd?.show(this)
         interstitialAd = null
-        loadInterstitialAd()
+        loadAd()
     }
 
     // ================= FETCH VIDEO =================
@@ -116,6 +117,7 @@ class MainActivity : AppCompatActivity() {
             .build()
 
         client.newCall(request).enqueue(object : Callback {
+
             override fun onFailure(call: Call, e: IOException) {
                 runOnUiThread {
                     Toast.makeText(this@MainActivity, "Fetch failed", Toast.LENGTH_SHORT).show()
@@ -130,7 +132,7 @@ class MainActivity : AppCompatActivity() {
                         val json = JSONObject(body ?: "{}")
 
                         if (json.optString("status") != "success") {
-                            Toast.makeText(this@MainActivity, "Failed to fetch", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "Error fetching video", Toast.LENGTH_SHORT).show()
                             return@runOnUiThread
                         }
 
@@ -161,6 +163,7 @@ class MainActivity : AppCompatActivity() {
             .build()
 
         client.newCall(request).enqueue(object : Callback {
+
             override fun onFailure(call: Call, e: IOException) {}
 
             override fun onResponse(call: Call, response: Response) {
@@ -191,7 +194,7 @@ class MainActivity : AppCompatActivity() {
 
                 if (!response.isSuccessful) {
                     runOnUiThread {
-                        Toast.makeText(this, "Download failed", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this@MainActivity, "Download failed", Toast.LENGTH_LONG).show()
                     }
                     return@Thread
                 }
@@ -210,26 +213,22 @@ class MainActivity : AppCompatActivity() {
                     put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                 }
 
-                val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                } else {
-                    MediaStore.Files.getContentUri("external")
-                }
+                val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
 
-                val fileUri = resolver.insert(uri, values)
+                val uri = resolver.insert(collection, values)
 
-                if (fileUri == null) {
+                if (uri == null) {
                     runOnUiThread {
-                        Toast.makeText(this, "Storage error", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this@MainActivity, "Storage error", Toast.LENGTH_LONG).show()
                     }
                     return@Thread
                 }
 
-                val outputStream = resolver.openOutputStream(fileUri)
+                val outputStream = resolver.openOutputStream(uri)
 
                 if (outputStream == null) {
                     runOnUiThread {
-                        Toast.makeText(this, "Output error", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this@MainActivity, "Output error", Toast.LENGTH_LONG).show()
                     }
                     return@Thread
                 }
@@ -249,10 +248,13 @@ class MainActivity : AppCompatActivity() {
                     progressBar.progress = 100
                     progressText.text = "100%"
 
-                    Toast.makeText(this, "Download complete", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Download complete", Toast.LENGTH_LONG).show()
 
                     val intent = Intent(Intent.ACTION_VIEW).apply {
-                        setDataAndType(fileUri, if (fileName.endsWith(".mp3")) "audio/*" else "video/*")
+                        setDataAndType(
+                            uri,
+                            if (fileName.endsWith(".mp3")) "audio/*" else "video/*"
+                        )
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     }
 
@@ -261,7 +263,7 @@ class MainActivity : AppCompatActivity() {
 
             } catch (e: Exception) {
                 runOnUiThread {
-                    Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Crash: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
 
