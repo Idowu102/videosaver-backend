@@ -1,9 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
 import socket
 import re
-import requests
 
 socket.setdefaulttimeout(120)
 
@@ -25,323 +24,194 @@ app.add_middleware(
 def home():
     return {
         "status": "running",
-        "engine": "Production Hybrid Engine",
-        "youtube": "optimized"
+        "engine": "yt-dlp production engine",
+        "version": "stable"
     }
 
-# ================= URL CLEANER =================
+# ================= URL NORMALIZER =================
 
 def clean_url(url: str):
-
     url = url.strip()
 
+    # normalize mobile
+    url = url.replace("m.youtube.com", "www.youtube.com")
+
+    # remove playlist noise
     if "&list=" in url:
         url = url.split("&list=")[0]
 
     if "&pp=" in url:
         url = url.split("&pp=")[0]
 
+    # shorts → watch
     if "youtube.com/shorts/" in url:
-
-        video_id = url.split("/shorts/")[1].split("?")[0]
-
-        url = f"https://www.youtube.com/watch?v={video_id}"
+        vid = url.split("/shorts/")[1].split("?")[0]
+        url = f"https://www.youtube.com/watch?v={vid}"
 
     return url
 
 # ================= VIDEO ID =================
 
 def get_video_id(url):
-
     patterns = [
         r"v=([a-zA-Z0-9_-]{11})",
         r"youtu\.be/([a-zA-Z0-9_-]{11})",
         r"shorts/([a-zA-Z0-9_-]{11})",
     ]
 
-    for pattern in patterns:
-
-        match = re.search(pattern, url)
-
-        if match:
-            return match.group(1)
+    for p in patterns:
+        m = re.search(p, url)
+        if m:
+            return m.group(1)
 
     return None
 
-# ================= YT OPTIONS =================
+# ================= YT-DLP OPTIONS =================
 
-def yt_opts(format_type="best"):
+def yt_opts(fmt="best", audio=False):
 
     return {
-
         "quiet": True,
         "no_warnings": True,
-        "noprogress": True,
-
         "nocheckcertificate": True,
+        "retries": 5,
+        "fragment_retries": 5,
+        "socket_timeout": 120,
+        "noplaylist": True,
+        "format": fmt,
+
+        # IMPORTANT: DO NOT HIDE ERRORS
         "ignoreerrors": False,
 
-        "geo_bypass": True,
-
-        "retries": 10,
-        "fragment_retries": 10,
-
-        "socket_timeout": 120,
-
-        "noplaylist": True,
-        "extract_flat": False,
-
-        "cachedir": False,
-
-        "format": format_type,
-
-        "merge_output_format": "mp4",
-
-        "youtube_include_dash_manifest": False,
-        "youtube_include_hls_manifest": True,
-
-        # cookies.txt must exist in same folder
+        # cookies optional
         "cookiefile": "cookies.txt",
 
         "http_headers": {
-
-            "User-Agent":
-                "com.google.android.youtube/19.09.37 (Linux; U; Android 11)",
-
-            "Accept-Language":
-                "en-US,en;q=0.9",
+            "User-Agent": (
+                "Mozilla/5.0 (Linux; Android 11) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/117.0 Mobile Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
         },
 
         "extractor_args": {
-
             "youtube": {
-
                 "player_client": [
-                    "android"
-                ],
-
-                "player_skip": [
-                    "configs",
-                    "webpage"
+                    "android",
+                    "web",
+                    "ios"
                 ]
             }
         }
     }
 
-# ================= YOUTUBE FALLBACK =================
+# ================= CORE EXTRACTOR =================
 
-def youtube_fallback(video_id):
-
-    try:
-
-        url = (
-            "https://www.youtube.com/oembed?"
-            f"url=https://www.youtube.com/watch?v={video_id}&format=json"
-        )
-
-        r = requests.get(url, timeout=20)
-
-        if r.status_code != 200:
-            return None
-
-        data = r.json()
-
-        thumb = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-
-        return {
-            "title": data.get("title", "YouTube Video"),
-            "thumbnail": thumb,
-            "duration": 0,
-            "url": f"https://www.youtube.com/watch?v={video_id}"
-        }
-
-    except:
-        return None
-
-# ================= SAFE EXTRACT =================
-
-def safe_extract(url, audio=False):
+def extract_youtube(url: str, audio: bool = False):
 
     url = clean_url(url)
 
+    # format strategy
     if audio:
-
         formats = [
-
-            "bestaudio[ext=m4a]",
-            "bestaudio",
-
-            "140",
-            "251",
-
-            "best"
+            "bestaudio[ext=m4a]/bestaudio/best",
         ]
-
     else:
-
         formats = [
-
-            # best quality
-            "bestvideo+bestaudio/best",
-
-            # universal progressive mp4
-            "18",
-
-            # mp4 fallback
+            "best[ext=mp4]+bestaudio/best",
             "best[ext=mp4]",
-
-            # final fallback
             "best"
         ]
 
     last_error = None
 
     for fmt in formats:
-
         try:
-
-            opts = yt_opts(fmt)
+            opts = yt_opts(fmt, audio)
 
             with yt_dlp.YoutubeDL(opts) as ydl:
-
                 info = ydl.extract_info(url, download=False)
 
-                if not info:
-                    continue
+            if not info:
+                continue
 
-                # direct playable url
-                if info.get("url"):
+            # pick best playable URL safely
+            stream_url = None
 
-                    return {
-                        "title": info.get("title"),
-                        "thumbnail": info.get("thumbnail"),
-                        "duration": info.get("duration"),
-                        "url": info.get("url")
-                    }
+            # case 1: direct
+            if info.get("url"):
+                stream_url = info["url"]
 
-                formats_data = info.get("formats", [])
-
-                if not formats_data:
-                    continue
-
-                # reverse for best quality first
-                for f in reversed(formats_data):
-
+            # case 2: formats fallback
+            if not stream_url and info.get("formats"):
+                for f in reversed(info["formats"]):
                     if not f.get("url"):
                         continue
 
-                    # audio endpoint
-                    if audio:
+                    if audio and f.get("acodec") == "none":
+                        continue
 
-                        if f.get("acodec") == "none":
-                            continue
+                    stream_url = f["url"]
+                    break
 
-                        return {
-                            "title": info.get("title"),
-                            "thumbnail": info.get("thumbnail"),
-                            "duration": info.get("duration"),
-                            "url": f.get("url")
-                        }
+            if not stream_url:
+                continue
 
-                    # video endpoint
-                    else:
-
-                        if f.get("vcodec") == "none":
-                            continue
-
-                        return {
-                            "title": info.get("title"),
-                            "thumbnail": info.get("thumbnail"),
-                            "duration": info.get("duration"),
-                            "url": f.get("url")
-                        }
+            return {
+                "title": info.get("title"),
+                "thumbnail": info.get("thumbnail"),
+                "duration": info.get("duration"),
+                "url": stream_url
+            }
 
         except Exception as e:
-
             last_error = str(e)
             continue
 
-    # fallback metadata
-    video_id = get_video_id(url)
-
-    if video_id:
-
-        fallback = youtube_fallback(video_id)
-
-        if fallback:
-            return fallback
-
-    raise Exception(last_error or "Extraction failed")
+    raise HTTPException(
+        status_code=500,
+        detail=f"yt-dlp failed: {last_error}"
+    )
 
 # ================= EXTRACT =================
 
 @app.get("/extract")
 def extract(url: str):
+    info = extract_youtube(url, audio=False)
 
-    try:
-
-        info = safe_extract(url)
-
-        return {
-            "status": "success",
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
-            "duration": info.get("duration"),
-
-            "best_download": info.get("url"),
-            "stream_url": info.get("url")
-        }
-
-    except Exception as e:
-
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
+    return {
+        "status": "success",
+        "title": info["title"],
+        "thumbnail": info["thumbnail"],
+        "duration": info["duration"],
+        "stream_url": info["url"],
+        "download_url": info["url"]
+    }
 
 # ================= STREAM =================
 
 @app.get("/stream")
 def stream(url: str):
+    info = extract_youtube(url, audio=False)
 
-    try:
-
-        info = safe_extract(url)
-
-        return {
-            "status": "success",
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
-            "duration": info.get("duration"),
-            "stream_url": info.get("url")
-        }
-
-    except Exception as e:
-
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
+    return {
+        "status": "success",
+        "title": info["title"],
+        "thumbnail": info["thumbnail"],
+        "duration": info["duration"],
+        "stream_url": info["url"]
+    }
 
 # ================= AUDIO =================
 
 @app.get("/audio")
 def audio(url: str):
+    info = extract_youtube(url, audio=True)
 
-    try:
-
-        info = safe_extract(url, audio=True)
-
-        return {
-            "status": "success",
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
-            "audio_url": info.get("url")
-        }
-
-    except Exception as e:
-
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
+    return {
+        "status": "success",
+        "title": info["title"],
+        "thumbnail": info["thumbnail"],
+        "audio_url": info["url"]
+    }
