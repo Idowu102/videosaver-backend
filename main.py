@@ -49,7 +49,7 @@ def clean_url(url: str):
 
     return url
 
-# ================= GET VIDEO ID =================
+# ================= VIDEO ID =================
 
 def get_video_id(url):
 
@@ -76,17 +76,31 @@ def yt_opts(format_type="best"):
 
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,
+
         "nocheckcertificate": True,
-        "ignoreerrors": True,
+        "ignoreerrors": False,
+
         "geo_bypass": True,
+
         "retries": 10,
         "fragment_retries": 10,
+
         "socket_timeout": 120,
+
         "noplaylist": True,
         "extract_flat": False,
+
+        "cachedir": False,
+
         "format": format_type,
 
-        # IMPORTANT
+        "merge_output_format": "mp4",
+
+        "youtube_include_dash_manifest": False,
+        "youtube_include_hls_manifest": True,
+
+        # cookies.txt must exist in same folder
         "cookiefile": "cookies.txt",
 
         "http_headers": {
@@ -103,10 +117,7 @@ def yt_opts(format_type="best"):
             "youtube": {
 
                 "player_client": [
-                    "android",
-                    "ios",
-                    "web",
-                    "tv_embedded"
+                    "android"
                 ],
 
                 "player_skip": [
@@ -123,7 +134,10 @@ def youtube_fallback(video_id):
 
     try:
 
-        url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+        url = (
+            "https://www.youtube.com/oembed?"
+            f"url=https://www.youtube.com/watch?v={video_id}&format=json"
+        )
 
         r = requests.get(url, timeout=20)
 
@@ -150,24 +164,35 @@ def safe_extract(url, audio=False):
 
     url = clean_url(url)
 
-    formats = []
-
     if audio:
 
         formats = [
+
             "bestaudio[ext=m4a]",
             "bestaudio",
+
+            "140",
+            "251",
+
             "best"
         ]
 
     else:
 
         formats = [
-    "18",   # 360p mp4 + audio
-    "22",   # 720p mp4 + audio
-    "best[ext=mp4]",
-    "best"
-]
+
+            # best quality
+            "bestvideo+bestaudio/best",
+
+            # universal progressive mp4
+            "18",
+
+            # mp4 fallback
+            "best[ext=mp4]",
+
+            # final fallback
+            "best"
+        ]
 
     last_error = None
 
@@ -181,19 +206,47 @@ def safe_extract(url, audio=False):
 
                 info = ydl.extract_info(url, download=False)
 
-                if info:
+                if not info:
+                    continue
 
-                    if info.get("url"):
-                        return info
+                # direct playable url
+                if info.get("url"):
 
-                    formats_data = info.get("formats", [])
+                    return {
+                        "title": info.get("title"),
+                        "thumbnail": info.get("thumbnail"),
+                        "duration": info.get("duration"),
+                        "url": info.get("url")
+                    }
 
-                    for f in reversed(formats_data):
+                formats_data = info.get("formats", [])
 
-                        if not f.get("url"):
+                if not formats_data:
+                    continue
+
+                # reverse for best quality first
+                for f in reversed(formats_data):
+
+                    if not f.get("url"):
+                        continue
+
+                    # audio endpoint
+                    if audio:
+
+                        if f.get("acodec") == "none":
                             continue
 
-                        if audio and f.get("acodec") == "none":
+                        return {
+                            "title": info.get("title"),
+                            "thumbnail": info.get("thumbnail"),
+                            "duration": info.get("duration"),
+                            "url": f.get("url")
+                        }
+
+                    # video endpoint
+                    else:
+
+                        if f.get("vcodec") == "none":
                             continue
 
                         return {
@@ -208,6 +261,7 @@ def safe_extract(url, audio=False):
             last_error = str(e)
             continue
 
+    # fallback metadata
     video_id = get_video_id(url)
 
     if video_id:
@@ -228,17 +282,14 @@ def extract(url: str):
 
         info = safe_extract(url)
 
-        video_url = info.get("url")
-
         return {
             "status": "success",
             "title": info.get("title"),
             "thumbnail": info.get("thumbnail"),
             "duration": info.get("duration"),
 
-            # FIX
-            "best_download": video_url,
-            "stream_url": video_url
+            "best_download": info.get("url"),
+            "stream_url": info.get("url")
         }
 
     except Exception as e:
