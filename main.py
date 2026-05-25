@@ -1,14 +1,32 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 import yt_dlp
 import socket
 import re
+import os
+import time
+import hashlib
+from urllib.parse import urlparse, parse_qs
+
+# =========================================================
+# SOCKET TIMEOUT
+# =========================================================
 
 socket.setdefaulttimeout(120)
 
-app = FastAPI()
+# =========================================================
+# APP
+# =========================================================
 
-# ================= CORS =================
+app = FastAPI(
+    title="Production YouTube Backend",
+    version="3.0.0"
+)
+
+# =========================================================
+# CORS
+# =========================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -18,200 +36,510 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ================= HOME =================
+# =========================================================
+# SIMPLE MEMORY CACHE
+# =========================================================
+
+CACHE = {}
+CACHE_TTL = 300  # 5 mins
+
+
+def cache_key(url, audio=False):
+    raw = f"{url}:{audio}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+def get_cache(url, audio=False):
+    key = cache_key(url, audio)
+
+    if key not in CACHE:
+        return None
+
+    item = CACHE[key]
+
+    if time.time() > item["expires"]:
+        del CACHE[key]
+        return None
+
+    return item["data"]
+
+
+def set_cache(url, data, audio=False):
+    key = cache_key(url, audio)
+
+    CACHE[key] = {
+        "data": data,
+        "expires": time.time() + CACHE_TTL
+    }
+
+
+# =========================================================
+# HOME
+# =========================================================
 
 @app.get("/")
 def home():
     return {
         "status": "running",
-        "engine": "yt-dlp production engine",
-        "version": "stable"
+        "engine": "Production Hybrid Engine",
+        "version": "3.0.0",
+        "features": [
+            "youtube extraction",
+            "audio extraction",
+            "stream support",
+            "cache system",
+            "shorts support",
+            "mobile youtube support",
+            "fallback clients",
+            "cookies support",
+            "retry engine",
+            "format fallback"
+        ]
     }
 
-# ================= URL NORMALIZER =================
+
+# =========================================================
+# HEALTH
+# =========================================================
+
+@app.get("/health")
+def health():
+    return {
+        "status": "healthy"
+    }
+
+
+# =========================================================
+# URL NORMALIZER
+# =========================================================
 
 def clean_url(url: str):
+
     url = url.strip()
 
-    # normalize mobile
+    # mobile youtube -> desktop
     url = url.replace("m.youtube.com", "www.youtube.com")
 
-    # remove playlist noise
+    # remove playlist
     if "&list=" in url:
         url = url.split("&list=")[0]
 
+    # remove pp param
     if "&pp=" in url:
         url = url.split("&pp=")[0]
 
-    # shorts → watch
+    # shorts support
     if "youtube.com/shorts/" in url:
-        vid = url.split("/shorts/")[1].split("?")[0]
-        url = f"https://www.youtube.com/watch?v={vid}"
+
+        video_id = url.split("/shorts/")[1].split("?")[0]
+
+        url = f"https://www.youtube.com/watch?v={video_id}"
 
     return url
 
-# ================= VIDEO ID =================
+
+# =========================================================
+# VIDEO ID
+# =========================================================
 
 def get_video_id(url):
+
     patterns = [
         r"v=([a-zA-Z0-9_-]{11})",
         r"youtu\.be/([a-zA-Z0-9_-]{11})",
         r"shorts/([a-zA-Z0-9_-]{11})",
     ]
 
-    for p in patterns:
-        m = re.search(p, url)
-        if m:
-            return m.group(1)
+    for pattern in patterns:
+
+        match = re.search(pattern, url)
+
+        if match:
+            return match.group(1)
 
     return None
 
-# ================= YT-DLP OPTIONS =================
+
+# =========================================================
+# THUMBNAIL FALLBACK
+# =========================================================
+
+def thumbnail_fallback(video_id):
+
+    return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+
+# =========================================================
+# YT-DLP OPTIONS
+# =========================================================
 
 def yt_opts(fmt="best", audio=False):
 
-    return {
+    opts = {
+
+        # logging
         "quiet": True,
         "no_warnings": True,
-        "nocheckcertificate": True,
-        "retries": 5,
-        "fragment_retries": 5,
-        "socket_timeout": 120,
-        "noplaylist": True,
-        "format": fmt,
 
-        # IMPORTANT: DO NOT HIDE ERRORS
+        # retries
+        "retries": 10,
+        "fragment_retries": 10,
+
+        # timeout
+        "socket_timeout": 120,
+
+        # youtube
+        "noplaylist": True,
+        "extract_flat": False,
+        "geo_bypass": True,
+
+        # IMPORTANT
         "ignoreerrors": False,
 
-        # cookies optional
-        "cookiefile": "cookies.txt",
+        # SSL
+        "nocheckcertificate": True,
 
+        # format
+        "format": fmt,
+
+        # cookies support
+        "cookiefile": "cookies.txt"
+        if os.path.exists("cookies.txt")
+        else None,
+
+        # headers
         "http_headers": {
+
             "User-Agent": (
-                "Mozilla/5.0 (Linux; Android 11) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/117.0 Mobile Safari/537.36"
+                "Mozilla/5.0 (Linux; Android 11; SM-G991B) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/120.0 Mobile Safari/537.36"
             ),
-            "Accept-Language": "en-US,en;q=0.9",
+
+            "Accept-Language":
+                "en-US,en;q=0.9",
         },
 
+        # extractor strategy
         "extractor_args": {
+
             "youtube": {
+
+                # IMPORTANT
                 "player_client": [
                     "android",
                     "web",
-                    "ios"
+                    "ios",
+                    "tv_embedded"
                 ]
             }
         }
     }
 
-# ================= CORE EXTRACTOR =================
+    return opts
 
-def extract_youtube(url: str, audio: bool = False):
+
+# =========================================================
+# FORMAT SELECTOR
+# =========================================================
+
+def get_format_priority(audio=False):
+
+    if audio:
+
+        return [
+
+            # best audio m4a
+            "bestaudio[ext=m4a]",
+
+            # any audio
+            "bestaudio",
+
+            # fallback
+            "best"
+        ]
+
+    return [
+
+        # merged best mp4
+        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
+
+        # progressive mp4
+        "best[ext=mp4]",
+
+        # fallback
+        "best"
+    ]
+
+
+# =========================================================
+# EXTRACT URL FROM FORMATS
+# =========================================================
+
+def extract_stream_url(info, audio=False):
+
+    # direct
+    if info.get("url"):
+        return info["url"]
+
+    formats = info.get("formats", [])
+
+    if not formats:
+        return None
+
+    # reverse = best first
+    for f in reversed(formats):
+
+        if not f.get("url"):
+            continue
+
+        # audio filtering
+        if audio and f.get("acodec") == "none":
+            continue
+
+        return f["url"]
+
+    return None
+
+
+# =========================================================
+# MAIN EXTRACTION ENGINE
+# =========================================================
+
+def safe_extract(url, audio=False):
 
     url = clean_url(url)
 
-    # format strategy
-    if audio:
-        formats = [
-            "bestaudio[ext=m4a]/bestaudio/best",
-        ]
-    else:
-        formats = [
-            "best[ext=mp4]+bestaudio/best",
-            "best[ext=mp4]",
-            "best"
-        ]
+    # =====================================================
+    # CACHE
+    # =====================================================
+
+    cached = get_cache(url, audio)
+
+    if cached:
+        return cached
+
+    formats = get_format_priority(audio)
 
     last_error = None
 
     for fmt in formats:
+
         try:
+
             opts = yt_opts(fmt, audio)
 
             with yt_dlp.YoutubeDL(opts) as ydl:
+
                 info = ydl.extract_info(url, download=False)
 
             if not info:
                 continue
 
-            # pick best playable URL safely
-            stream_url = None
-
-            # case 1: direct
-            if info.get("url"):
-                stream_url = info["url"]
-
-            # case 2: formats fallback
-            if not stream_url and info.get("formats"):
-                for f in reversed(info["formats"]):
-                    if not f.get("url"):
-                        continue
-
-                    if audio and f.get("acodec") == "none":
-                        continue
-
-                    stream_url = f["url"]
-                    break
+            stream_url = extract_stream_url(info, audio)
 
             if not stream_url:
                 continue
 
-            return {
-                "title": info.get("title"),
-                "thumbnail": info.get("thumbnail"),
-                "duration": info.get("duration"),
-                "url": stream_url
+            data = {
+
+                "title":
+                    info.get("title", "YouTube Video"),
+
+                "thumbnail":
+                    info.get("thumbnail")
+                    or thumbnail_fallback(
+                        get_video_id(url)
+                    ),
+
+                "duration":
+                    info.get("duration", 0),
+
+                "stream_url":
+                    stream_url,
+
+                "webpage_url":
+                    info.get("webpage_url", url),
+
+                "uploader":
+                    info.get("uploader"),
+
+                "view_count":
+                    info.get("view_count"),
+
+                "like_count":
+                    info.get("like_count"),
+
+                "ext":
+                    info.get("ext"),
+
+                "format":
+                    fmt
             }
 
+            set_cache(url, data, audio)
+
+            return data
+
         except Exception as e:
+
             last_error = str(e)
+
             continue
 
     raise HTTPException(
         status_code=500,
-        detail=f"yt-dlp failed: {last_error}"
+        detail=f"Extraction failed: {last_error}"
     )
 
-# ================= EXTRACT =================
+
+# =========================================================
+# EXTRACT
+# =========================================================
 
 @app.get("/extract")
 def extract(url: str):
-    info = extract_youtube(url, audio=False)
+
+    data = safe_extract(url)
 
     return {
         "status": "success",
-        "title": info["title"],
-        "thumbnail": info["thumbnail"],
-        "duration": info["duration"],
-        "stream_url": info["url"],
-        "download_url": info["url"]
+        **data
     }
 
-# ================= STREAM =================
+
+# =========================================================
+# STREAM
+# =========================================================
 
 @app.get("/stream")
 def stream(url: str):
-    info = extract_youtube(url, audio=False)
+
+    data = safe_extract(url)
 
     return {
         "status": "success",
-        "title": info["title"],
-        "thumbnail": info["thumbnail"],
-        "duration": info["duration"],
-        "stream_url": info["url"]
+        **data
     }
 
-# ================= AUDIO =================
+
+# =========================================================
+# AUDIO
+# =========================================================
 
 @app.get("/audio")
 def audio(url: str):
-    info = extract_youtube(url, audio=True)
+
+    data = safe_extract(url, audio=True)
 
     return {
         "status": "success",
-        "title": info["title"],
-        "thumbnail": info["thumbnail"],
-        "audio_url": info["url"]
+        **data
     }
+
+
+# =========================================================
+# REDIRECT STREAM
+# =========================================================
+
+@app.get("/redirect")
+def redirect(url: str):
+
+    data = safe_extract(url)
+
+    return RedirectResponse(
+        url=data["stream_url"]
+    )
+
+
+# =========================================================
+# AUDIO REDIRECT
+# =========================================================
+
+@app.get("/audio-redirect")
+def audio_redirect(url: str):
+
+    data = safe_extract(url, audio=True)
+
+    return RedirectResponse(
+        url=data["stream_url"]
+    )
+
+
+# =========================================================
+# VIDEO INFO ONLY
+# =========================================================
+
+@app.get("/info")
+def info(url: str):
+
+    url = clean_url(url)
+
+    opts = yt_opts("best")
+
+    try:
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+
+            info = ydl.extract_info(
+                url,
+                download=False
+            )
+
+        return {
+
+            "status": "success",
+
+            "title":
+                info.get("title"),
+
+            "thumbnail":
+                info.get("thumbnail"),
+
+            "duration":
+                info.get("duration"),
+
+            "uploader":
+                info.get("uploader"),
+
+            "view_count":
+                info.get("view_count"),
+
+            "like_count":
+                info.get("like_count"),
+
+            "webpage_url":
+                info.get("webpage_url"),
+        }
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+# =========================================================
+# CLEAR CACHE
+# =========================================================
+
+@app.get("/clear-cache")
+def clear_cache():
+
+    CACHE.clear()
+
+    return {
+        "status": "success",
+        "message": "cache cleared"
+    }
+
+
+# =========================================================
+# STARTUP MESSAGE
+# =========================================================
+
+print("===================================")
+print("Production YouTube Backend Started")
+print("===================================")
