@@ -1,6 +1,7 @@
-fastapi
-uvicorn[standard]
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
 yt-dlp
-requests
-python-multipart
-aiofiles
+requests==2.32.3
+python-multipart==0.0.20
+aiofiles==24.1.0
+browser-cookie3
