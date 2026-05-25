@@ -20,7 +20,7 @@ socket.setdefaulttimeout(120)
 
 app = FastAPI(
     title="YouTube Downloader API",
-    version="2026.1"
+    version="2026.2"
 )
 
 # =========================================================
@@ -66,12 +66,14 @@ def home():
             "mobile youtube support",
             "ffmpeg merge",
             "audio mp3 conversion",
-            "stable extraction"
+            "stable extraction",
+            "nodejs challenge solving",
+            "cookies support"
         ]
     }
 
 # =========================================================
-# URL CLEANER
+# CLEAN URL
 # =========================================================
 
 def clean_url(url: str):
@@ -107,51 +109,22 @@ def clean_url(url: str):
     return url
 
 # =========================================================
-# VIDEO ID
-# =========================================================
-
-def get_video_id(url):
-
-    patterns = [
-
-        r"v=([a-zA-Z0-9_-]{11})",
-
-        r"youtu\.be/([a-zA-Z0-9_-]{11})",
-
-        r"shorts/([a-zA-Z0-9_-]{11})",
-    ]
-
-    for pattern in patterns:
-
-        match = re.search(pattern, url)
-
-        if match:
-            return match.group(1)
-
-    return None
-
-# =========================================================
-# YT-DLP OPTIONS
+# YT OPTIONS
 # =========================================================
 
 def yt_opts(output_path=None, audio=False):
 
-    # IMPORTANT FIX
-    # DO NOT USE ANDROID/IOS CLIENTS
-    # THEY REQUIRE PO TOKENS NOW
+    # IMPORTANT:
+    # avoid protected DASH formats
 
     if audio:
 
         fmt = (
-            "best[ext=m4a]/"
             "bestaudio/"
             "best"
         )
 
     else:
-
-        # IMPORTANT FIX
-        # progressive mp4 only
 
         fmt = (
             "best[ext=mp4]/"
@@ -160,6 +133,7 @@ def yt_opts(output_path=None, audio=False):
 
     opts = {
 
+        # IMPORTANT
         "format": fmt,
 
         "quiet": False,
@@ -181,6 +155,12 @@ def yt_opts(output_path=None, audio=False):
         "socket_timeout": 120,
 
         # IMPORTANT
+        "extract_flat": False,
+
+        # IMPORTANT
+        "concurrent_fragment_downloads": 1,
+
+        # IMPORTANT
         "http_headers": {
 
             "User-Agent":
@@ -190,21 +170,26 @@ def yt_opts(output_path=None, audio=False):
                 "en-US,en;q=0.9",
         },
 
-        # IMPORTANT FIX
-        # WEB CLIENT ONLY
+        # IMPORTANT
+        # JS challenge solving
+        "js_runtimes": ["node"],
 
+        # IMPORTANT
+        # use web only
         "extractor_args": {
 
             "youtube": {
 
                 "player_client": [
                     "web"
-                ]
+                ],
+
+                "player_skip": []
             }
         }
     }
 
-    # output
+    # output path
     if output_path:
 
         opts["outtmpl"] = output_path
@@ -216,10 +201,22 @@ def yt_opts(output_path=None, audio=False):
 
         opts["ffmpeg_location"] = ffmpeg_path
 
-    # cookies optional
+    # cookies file
     if os.path.exists("cookies.txt"):
 
         opts["cookiefile"] = "cookies.txt"
+
+    # auto browser cookies
+    try:
+
+        import browser_cookie3
+
+        opts["cookiesfrombrowser"] = (
+            "chrome",
+        )
+
+    except:
+        pass
 
     return opts
 
@@ -229,7 +226,7 @@ def yt_opts(output_path=None, audio=False):
 
 def get_stream_url(info, audio=False):
 
-    # direct url
+    # direct
     if info.get("url"):
 
         return info["url"]
@@ -246,7 +243,7 @@ def get_stream_url(info, audio=False):
         if not f.get("url"):
             continue
 
-        # skip no audio
+        # audio only
         if audio:
 
             if f.get("acodec") == "none":
@@ -378,12 +375,12 @@ def audio_stream(url: str):
                 download=False
             )
 
-        stream_url = get_stream_url(
+        audio_url = get_stream_url(
             info,
             audio=True
         )
 
-        if not stream_url:
+        if not audio_url:
 
             raise Exception(
                 "No audio stream found"
@@ -400,7 +397,7 @@ def audio_stream(url: str):
                 info.get("thumbnail"),
 
             "audio_url":
-                stream_url
+                audio_url
         }
 
     except Exception as e:
@@ -441,7 +438,7 @@ def download(url: str):
                 info
             )
 
-        # merged file correction
+        # merged correction
         base = filename.rsplit(".", 1)[0]
 
         mp4 = base + ".mp4"
@@ -491,7 +488,7 @@ def audio(url: str):
             audio=True
         )
 
-        # convert to mp3
+        # mp3 conversion
         opts["postprocessors"] = [{
 
             "key":
