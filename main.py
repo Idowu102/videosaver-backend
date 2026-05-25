@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 import yt_dlp
@@ -7,6 +7,7 @@ import uuid
 import shutil
 import socket
 import re
+import traceback
 
 # =========================================================
 # SOCKET TIMEOUT
@@ -20,7 +21,7 @@ socket.setdefaulttimeout(120)
 
 app = FastAPI(
     title="YouTube Downloader API",
-    version="2026.2"
+    version="2026.3"
 )
 
 # =========================================================
@@ -36,7 +37,7 @@ app.add_middleware(
 )
 
 # =========================================================
-# DOWNLOAD DIRECTORY
+# DOWNLOADS DIR
 # =========================================================
 
 DOWNLOAD_DIR = "downloads"
@@ -55,20 +56,24 @@ def home():
         "status": "running",
 
         "engine":
-            "Production YouTube Engine",
+            "Ultimate Production Engine",
+
+        "version":
+            "2026.3",
 
         "features": [
 
             "video download",
             "audio download",
-            "stream extraction",
-            "youtube shorts support",
-            "mobile youtube support",
-            "ffmpeg merge",
-            "audio mp3 conversion",
-            "stable extraction",
+            "youtube streaming",
+            "youtube shorts",
+            "mobile youtube",
+            "cookies support",
+            "ffmpeg support",
             "nodejs challenge solving",
-            "cookies support"
+            "stable extraction",
+            "redirect streaming",
+            "safe fallback engine"
         ]
     }
 
@@ -88,18 +93,21 @@ def clean_url(url: str):
 
     # remove playlist
     if "&list=" in url:
+
         url = url.split("&list=")[0]
 
     # remove pp
     if "&pp=" in url:
+
         url = url.split("&pp=")[0]
 
     # shorts support
     if "youtube.com/shorts/" in url:
 
-        video_id = url.split(
-            "/shorts/"
-        )[1].split("?")[0]
+        video_id = (
+            url.split("/shorts/")[1]
+            .split("?")[0]
+        )
 
         url = (
             "https://www.youtube.com/watch?v="
@@ -115,7 +123,8 @@ def clean_url(url: str):
 def yt_opts(output_path=None, audio=False):
 
     # IMPORTANT:
-    # avoid protected DASH formats
+    # Avoid DASH formats
+    # Use stable formats only
 
     if audio:
 
@@ -133,8 +142,15 @@ def yt_opts(output_path=None, audio=False):
 
     opts = {
 
-        # IMPORTANT
+        # =================================================
+        # FORMAT
+        # =================================================
+
         "format": fmt,
+
+        # =================================================
+        # GENERAL
+        # =================================================
 
         "quiet": False,
 
@@ -154,59 +170,87 @@ def yt_opts(output_path=None, audio=False):
 
         "socket_timeout": 120,
 
-        # IMPORTANT
         "extract_flat": False,
 
-        # IMPORTANT
         "concurrent_fragment_downloads": 1,
 
-        # IMPORTANT
+        # =================================================
+        # HEADERS
+        # =================================================
+
         "http_headers": {
 
             "User-Agent":
-                "Mozilla/5.0",
+                (
+                    "Mozilla/5.0 "
+                    "(Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36"
+                ),
 
             "Accept-Language":
                 "en-US,en;q=0.9",
         },
 
-        # IMPORTANT
-        # JS challenge solving
+        # =================================================
+        # JS RUNTIME
+        # =================================================
+
         "js_runtimes": ["node"],
 
-        # IMPORTANT
-        # use web only
+        # =================================================
+        # YOUTUBE
+        # =================================================
+
         "extractor_args": {
 
             "youtube": {
 
+                # IMPORTANT
+                # WEB ONLY
+
                 "player_client": [
+
                     "web"
                 ],
 
+                # IMPORTANT
                 "player_skip": []
             }
         }
     }
 
-    # output path
+    # =====================================================
+    # OUTPUT
+    # =====================================================
+
     if output_path:
 
         opts["outtmpl"] = output_path
 
-    # ffmpeg
+    # =====================================================
+    # FFMPEG
+    # =====================================================
+
     ffmpeg_path = shutil.which("ffmpeg")
 
     if ffmpeg_path:
 
         opts["ffmpeg_location"] = ffmpeg_path
 
-    # cookies file
+    # =====================================================
+    # COOKIES FILE
+    # =====================================================
+
     if os.path.exists("cookies.txt"):
 
         opts["cookiefile"] = "cookies.txt"
 
-    # auto browser cookies
+    # =====================================================
+    # BROWSER COOKIES
+    # =====================================================
+
     try:
 
         import browser_cookie3
@@ -221,7 +265,7 @@ def yt_opts(output_path=None, audio=False):
     return opts
 
 # =========================================================
-# SAFE STREAM URL
+# STREAM URL EXTRACTOR
 # =========================================================
 
 def get_stream_url(info, audio=False):
@@ -243,7 +287,7 @@ def get_stream_url(info, audio=False):
         if not f.get("url"):
             continue
 
-        # audio only
+        # audio mode
         if audio:
 
             if f.get("acodec") == "none":
@@ -260,48 +304,55 @@ def get_stream_url(info, audio=False):
 @app.get("/info")
 def info(url: str):
 
-    url = clean_url(url)
-
     try:
+
+        url = clean_url(url)
 
         opts = yt_opts()
 
         with yt_dlp.YoutubeDL(opts) as ydl:
 
-            info = ydl.extract_info(
+            data = ydl.extract_info(
                 url,
                 download=False
             )
 
         return {
 
-            "status": "success",
+            "status":
+                "success",
 
             "title":
-                info.get("title"),
+                data.get("title"),
 
             "thumbnail":
-                info.get("thumbnail"),
+                data.get("thumbnail"),
 
             "duration":
-                info.get("duration"),
+                data.get("duration"),
 
             "uploader":
-                info.get("uploader"),
+                data.get("uploader"),
 
             "view_count":
-                info.get("view_count"),
+                data.get("view_count"),
 
             "webpage_url":
-                info.get("webpage_url")
+                data.get("webpage_url")
         }
 
     except Exception as e:
 
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        traceback.print_exc()
+
+        return {
+
+            "status":
+                "failed",
+
+            "error":
+                str(e)
+        }
 
 # =========================================================
 # STREAM
@@ -310,39 +361,56 @@ def info(url: str):
 @app.get("/stream")
 def stream(url: str):
 
-    url = clean_url(url)
-
     try:
+
+        url = clean_url(url)
 
         opts = yt_opts()
 
         with yt_dlp.YoutubeDL(opts) as ydl:
 
-            info = ydl.extract_info(
+            data = ydl.extract_info(
                 url,
                 download=False
             )
 
-        stream_url = get_stream_url(info)
+        if not data:
+
+            return {
+
+                "status":
+                    "failed",
+
+                "error":
+                    "No video info extracted"
+            }
+
+        stream_url = get_stream_url(data)
 
         if not stream_url:
 
-            raise Exception(
-                "No stream URL found"
-            )
+            return {
+
+                "status":
+                    "failed",
+
+                "error":
+                    "No stream URL found"
+            }
 
         return {
 
-            "status": "success",
+            "status":
+                "success",
 
             "title":
-                info.get("title"),
+                data.get("title"),
 
             "thumbnail":
-                info.get("thumbnail"),
+                data.get("thumbnail"),
 
             "duration":
-                info.get("duration"),
+                data.get("duration"),
 
             "stream_url":
                 stream_url
@@ -350,10 +418,16 @@ def stream(url: str):
 
     except Exception as e:
 
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        traceback.print_exc()
+
+        return {
+
+            "status":
+                "failed",
+
+            "error":
+                str(e)
+        }
 
 # =========================================================
 # AUDIO STREAM
@@ -362,39 +436,45 @@ def stream(url: str):
 @app.get("/audio-stream")
 def audio_stream(url: str):
 
-    url = clean_url(url)
-
     try:
+
+        url = clean_url(url)
 
         opts = yt_opts(audio=True)
 
         with yt_dlp.YoutubeDL(opts) as ydl:
 
-            info = ydl.extract_info(
+            data = ydl.extract_info(
                 url,
                 download=False
             )
 
         audio_url = get_stream_url(
-            info,
+            data,
             audio=True
         )
 
         if not audio_url:
 
-            raise Exception(
-                "No audio stream found"
-            )
+            return {
+
+                "status":
+                    "failed",
+
+                "error":
+                    "No audio stream found"
+            }
 
         return {
 
-            "status": "success",
+            "status":
+                "success",
 
             "title":
-                info.get("title"),
+                data.get("title"),
 
             "thumbnail":
-                info.get("thumbnail"),
+                data.get("thumbnail"),
 
             "audio_url":
                 audio_url
@@ -402,10 +482,16 @@ def audio_stream(url: str):
 
     except Exception as e:
 
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        traceback.print_exc()
+
+        return {
+
+            "status":
+                "failed",
+
+            "error":
+                str(e)
+        }
 
 # =========================================================
 # DOWNLOAD VIDEO
@@ -414,31 +500,31 @@ def audio_stream(url: str):
 @app.get("/download")
 def download(url: str):
 
-    url = clean_url(url)
-
-    uid = str(uuid.uuid4())
-
-    output_template = os.path.join(
-        DOWNLOAD_DIR,
-        f"{uid}.%(ext)s"
-    )
-
     try:
+
+        url = clean_url(url)
+
+        uid = str(uuid.uuid4())
+
+        output_template = os.path.join(
+            DOWNLOAD_DIR,
+            f"{uid}.%(ext)s"
+        )
 
         opts = yt_opts(output_template)
 
         with yt_dlp.YoutubeDL(opts) as ydl:
 
-            info = ydl.extract_info(
+            data = ydl.extract_info(
                 url,
                 download=True
             )
 
             filename = ydl.prepare_filename(
-                info
+                data
             )
 
-        # merged correction
+        # mp4 correction
         base = filename.rsplit(".", 1)[0]
 
         mp4 = base + ".mp4"
@@ -446,6 +532,17 @@ def download(url: str):
         if os.path.exists(mp4):
 
             filename = mp4
+
+        if not os.path.exists(filename):
+
+            return {
+
+                "status":
+                    "failed",
+
+                "error":
+                    "Downloaded file missing"
+            }
 
         return FileResponse(
 
@@ -460,35 +557,44 @@ def download(url: str):
 
     except Exception as e:
 
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        traceback.print_exc()
+
+        return {
+
+            "status":
+                "failed",
+
+            "error":
+                str(e)
+        }
 
 # =========================================================
-# DOWNLOAD AUDIO MP3
+# DOWNLOAD AUDIO
 # =========================================================
 
 @app.get("/audio")
 def audio(url: str):
 
-    url = clean_url(url)
-
-    uid = str(uuid.uuid4())
-
-    output_template = os.path.join(
-        DOWNLOAD_DIR,
-        f"{uid}.%(ext)s"
-    )
-
     try:
+
+        url = clean_url(url)
+
+        uid = str(uuid.uuid4())
+
+        output_template = os.path.join(
+            DOWNLOAD_DIR,
+            f"{uid}.%(ext)s"
+        )
 
         opts = yt_opts(
             output_template,
             audio=True
         )
 
-        # mp3 conversion
+        # =================================================
+        # MP3 CONVERSION
+        # =================================================
+
         opts["postprocessors"] = [{
 
             "key":
@@ -503,19 +609,30 @@ def audio(url: str):
 
         with yt_dlp.YoutubeDL(opts) as ydl:
 
-            info = ydl.extract_info(
+            data = ydl.extract_info(
                 url,
                 download=True
             )
 
             filename = ydl.prepare_filename(
-                info
+                data
             )
 
         mp3 = (
             filename.rsplit(".", 1)[0]
             + ".mp3"
         )
+
+        if not os.path.exists(mp3):
+
+            return {
+
+                "status":
+                    "failed",
+
+                "error":
+                    "MP3 conversion failed"
+            }
 
         return FileResponse(
 
@@ -528,10 +645,16 @@ def audio(url: str):
 
     except Exception as e:
 
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        traceback.print_exc()
+
+        return {
+
+            "status":
+                "failed",
+
+            "error":
+                str(e)
+        }
 
 # =========================================================
 # REDIRECT STREAM
@@ -540,26 +663,31 @@ def audio(url: str):
 @app.get("/redirect")
 def redirect(url: str):
 
-    url = clean_url(url)
-
     try:
+
+        url = clean_url(url)
 
         opts = yt_opts()
 
         with yt_dlp.YoutubeDL(opts) as ydl:
 
-            info = ydl.extract_info(
+            data = ydl.extract_info(
                 url,
                 download=False
             )
 
-        stream_url = get_stream_url(info)
+        stream_url = get_stream_url(data)
 
         if not stream_url:
 
-            raise Exception(
-                "No stream URL found"
-            )
+            return {
+
+                "status":
+                    "failed",
+
+                "error":
+                    "No redirect stream URL found"
+            }
 
         return RedirectResponse(
             url=stream_url
@@ -567,10 +695,16 @@ def redirect(url: str):
 
     except Exception as e:
 
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        traceback.print_exc()
+
+        return {
+
+            "status":
+                "failed",
+
+            "error":
+                str(e)
+        }
 
 # =========================================================
 # HEALTH
@@ -580,7 +714,9 @@ def redirect(url: str):
 def health():
 
     return {
-        "status": "healthy"
+
+        "status":
+            "healthy"
     }
 
 # =========================================================
