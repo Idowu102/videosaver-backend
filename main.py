@@ -1,12 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse
 import yt_dlp
 import os
 import uuid
 import shutil
 import socket
-import re
 import traceback
 
 # =========================================================
@@ -20,8 +19,8 @@ socket.setdefaulttimeout(120)
 # =========================================================
 
 app = FastAPI(
-    title="YouTube Downloader API",
-    version="2026.3"
+    title="Stable YouTube Downloader API",
+    version="2026.5"
 )
 
 # =========================================================
@@ -37,7 +36,7 @@ app.add_middleware(
 )
 
 # =========================================================
-# DOWNLOADS DIR
+# STORAGE
 # =========================================================
 
 DOWNLOAD_DIR = "downloads"
@@ -45,37 +44,16 @@ DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # =========================================================
-# HOME
+# URL CHECK
 # =========================================================
 
-@app.get("/")
-def home():
+def is_youtube(url: str):
 
-    return {
+    return any(x in url for x in [
 
-        "status": "running",
-
-        "engine":
-            "Ultimate Production Engine",
-
-        "version":
-            "2026.3",
-
-        "features": [
-
-            "video download",
-            "audio download",
-            "youtube streaming",
-            "youtube shorts",
-            "mobile youtube",
-            "cookies support",
-            "ffmpeg support",
-            "nodejs challenge solving",
-            "stable extraction",
-            "redirect streaming",
-            "safe fallback engine"
-        ]
-    }
+        "youtube.com",
+        "youtu.be"
+    ])
 
 # =========================================================
 # CLEAN URL
@@ -117,28 +95,19 @@ def clean_url(url: str):
     return url
 
 # =========================================================
-# YT OPTIONS
+# yt-dlp OPTIONS
 # =========================================================
 
-def yt_opts(output_path=None, audio=False):
+def ydl_opts(outtmpl=None, audio=False):
 
     # IMPORTANT:
-    # Avoid DASH formats
-    # Use stable formats only
+    # Avoid unstable DASH extraction
 
-    if audio:
-
-        fmt = (
-            "bestaudio/"
-            "best"
-        )
-
-    else:
-
-        fmt = (
-            "best[ext=mp4]/"
-            "best"
-        )
+    fmt = (
+        "bestaudio/best"
+        if audio else
+        "best[ext=mp4]/best"
+    )
 
     opts = {
 
@@ -152,9 +121,9 @@ def yt_opts(output_path=None, audio=False):
         # GENERAL
         # =================================================
 
-        "quiet": False,
+        "quiet": True,
 
-        "no_warnings": False,
+        "no_warnings": True,
 
         "noplaylist": True,
 
@@ -171,8 +140,6 @@ def yt_opts(output_path=None, audio=False):
         "socket_timeout": 120,
 
         "extract_flat": False,
-
-        "concurrent_fragment_downloads": 1,
 
         # =================================================
         # HEADERS
@@ -194,29 +161,16 @@ def yt_opts(output_path=None, audio=False):
         },
 
         # =================================================
-        # JS RUNTIME
-        # =================================================
-
-        "js_runtimes": ["node"],
-
-        # =================================================
-        # YOUTUBE
+        # YOUTUBE CLIENT
         # =================================================
 
         "extractor_args": {
 
             "youtube": {
 
-                # IMPORTANT
-                # WEB ONLY
-
                 "player_client": [
-
                     "web"
-                ],
-
-                # IMPORTANT
-                "player_skip": []
+                ]
             }
         }
     }
@@ -225,77 +179,74 @@ def yt_opts(output_path=None, audio=False):
     # OUTPUT
     # =====================================================
 
-    if output_path:
+    if outtmpl:
 
-        opts["outtmpl"] = output_path
+        opts["outtmpl"] = outtmpl
 
     # =====================================================
     # FFMPEG
     # =====================================================
 
-    ffmpeg_path = shutil.which("ffmpeg")
+    ffmpeg = shutil.which("ffmpeg")
 
-    if ffmpeg_path:
+    if ffmpeg:
 
-        opts["ffmpeg_location"] = ffmpeg_path
+        opts["ffmpeg_location"] = ffmpeg
 
     # =====================================================
-    # COOKIES FILE
+    # COOKIES
     # =====================================================
 
     if os.path.exists("cookies.txt"):
 
         opts["cookiefile"] = "cookies.txt"
 
-    # =====================================================
-    # BROWSER COOKIES
-    # =====================================================
-
-    try:
-
-        import browser_cookie3
-
-        opts["cookiesfrombrowser"] = (
-            "chrome",
-        )
-
-    except:
-        pass
-
     return opts
 
 # =========================================================
-# STREAM URL EXTRACTOR
+# SAFE RESPONSE
 # =========================================================
 
-def get_stream_url(info, audio=False):
+def failed(error):
 
-    # direct
-    if info.get("url"):
+    return JSONResponse({
 
-        return info["url"]
+        "status": "failed",
 
-    formats = info.get("formats", [])
+        "error": str(error)
 
-    if not formats:
+    })
 
-        return None
+# =========================================================
+# HEALTH
+# =========================================================
 
-    # reverse = best first
-    for f in reversed(formats):
+@app.get("/")
+def home():
 
-        if not f.get("url"):
-            continue
+    return {
 
-        # audio mode
-        if audio:
+        "status":
+            "running",
 
-            if f.get("acodec") == "none":
-                continue
+        "engine":
+            "Stable Production Engine",
 
-        return f["url"]
+        "version":
+            "2026.5",
 
-    return None
+        "features": [
+
+            "youtube download",
+            "youtube audio",
+            "youtube stream",
+            "shorts support",
+            "mobile youtube support",
+            "ffmpeg support",
+            "cookies support",
+            "stable extraction"
+        ]
+    }
 
 # =========================================================
 # INFO
@@ -306,11 +257,17 @@ def info(url: str):
 
     try:
 
+        if not is_youtube(url):
+
+            return failed(
+                "Only YouTube URLs supported"
+            )
+
         url = clean_url(url)
 
-        opts = yt_opts()
-
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with yt_dlp.YoutubeDL(
+            ydl_opts()
+        ) as ydl:
 
             data = ydl.extract_info(
                 url,
@@ -335,24 +292,14 @@ def info(url: str):
                 data.get("uploader"),
 
             "view_count":
-                data.get("view_count"),
-
-            "webpage_url":
-                data.get("webpage_url")
+                data.get("view_count")
         }
 
     except Exception as e:
 
         traceback.print_exc()
 
-        return {
-
-            "status":
-                "failed",
-
-            "error":
-                str(e)
-        }
+        return failed(e)
 
 # =========================================================
 # STREAM
@@ -363,40 +310,42 @@ def stream(url: str):
 
     try:
 
+        if not is_youtube(url):
+
+            return failed(
+                "Only YouTube URLs supported"
+            )
+
         url = clean_url(url)
 
-        opts = yt_opts()
-
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with yt_dlp.YoutubeDL(
+            ydl_opts()
+        ) as ydl:
 
             data = ydl.extract_info(
                 url,
                 download=False
             )
 
-        if not data:
+        stream_url = data.get("url")
 
-            return {
+        # fallback
+        if not stream_url:
 
-                "status":
-                    "failed",
+            for f in reversed(
+                data.get("formats", [])
+            ):
 
-                "error":
-                    "No video info extracted"
-            }
+                if f.get("url"):
 
-        stream_url = get_stream_url(data)
+                    stream_url = f["url"]
+                    break
 
         if not stream_url:
 
-            return {
-
-                "status":
-                    "failed",
-
-                "error":
-                    "No stream URL found"
-            }
+            return failed(
+                "No stream URL found"
+            )
 
         return {
 
@@ -420,87 +369,22 @@ def stream(url: str):
 
         traceback.print_exc()
 
-        return {
-
-            "status":
-                "failed",
-
-            "error":
-                str(e)
-        }
+        return failed(e)
 
 # =========================================================
-# AUDIO STREAM
-# =========================================================
-
-@app.get("/audio-stream")
-def audio_stream(url: str):
-
-    try:
-
-        url = clean_url(url)
-
-        opts = yt_opts(audio=True)
-
-        with yt_dlp.YoutubeDL(opts) as ydl:
-
-            data = ydl.extract_info(
-                url,
-                download=False
-            )
-
-        audio_url = get_stream_url(
-            data,
-            audio=True
-        )
-
-        if not audio_url:
-
-            return {
-
-                "status":
-                    "failed",
-
-                "error":
-                    "No audio stream found"
-            }
-
-        return {
-
-            "status":
-                "success",
-
-            "title":
-                data.get("title"),
-
-            "thumbnail":
-                data.get("thumbnail"),
-
-            "audio_url":
-                audio_url
-        }
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return {
-
-            "status":
-                "failed",
-
-            "error":
-                str(e)
-        }
-
-# =========================================================
-# DOWNLOAD VIDEO
+# VIDEO DOWNLOAD
 # =========================================================
 
 @app.get("/download")
 def download(url: str):
 
     try:
+
+        if not is_youtube(url):
+
+            return failed(
+                "Only YouTube URLs supported"
+            )
 
         url = clean_url(url)
 
@@ -511,9 +395,9 @@ def download(url: str):
             f"{uid}.%(ext)s"
         )
 
-        opts = yt_opts(output_template)
-
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with yt_dlp.YoutubeDL(
+            ydl_opts(output_template)
+        ) as ydl:
 
             data = ydl.extract_info(
                 url,
@@ -524,7 +408,7 @@ def download(url: str):
                 data
             )
 
-        # mp4 correction
+        # merged mp4 correction
         base = filename.rsplit(".", 1)[0]
 
         mp4 = base + ".mp4"
@@ -535,14 +419,9 @@ def download(url: str):
 
         if not os.path.exists(filename):
 
-            return {
-
-                "status":
-                    "failed",
-
-                "error":
-                    "Downloaded file missing"
-            }
+            return failed(
+                "Downloaded file missing"
+            )
 
         return FileResponse(
 
@@ -559,23 +438,22 @@ def download(url: str):
 
         traceback.print_exc()
 
-        return {
-
-            "status":
-                "failed",
-
-            "error":
-                str(e)
-        }
+        return failed(e)
 
 # =========================================================
-# DOWNLOAD AUDIO
+# AUDIO DOWNLOAD
 # =========================================================
 
 @app.get("/audio")
 def audio(url: str):
 
     try:
+
+        if not is_youtube(url):
+
+            return failed(
+                "Only YouTube URLs supported"
+            )
 
         url = clean_url(url)
 
@@ -586,7 +464,7 @@ def audio(url: str):
             f"{uid}.%(ext)s"
         )
 
-        opts = yt_opts(
+        opts = ydl_opts(
             output_template,
             audio=True
         )
@@ -625,14 +503,9 @@ def audio(url: str):
 
         if not os.path.exists(mp3):
 
-            return {
-
-                "status":
-                    "failed",
-
-                "error":
-                    "MP3 conversion failed"
-            }
+            return failed(
+                "MP3 conversion failed"
+            )
 
         return FileResponse(
 
@@ -640,89 +513,21 @@ def audio(url: str):
 
             media_type="audio/mpeg",
 
-            filename=os.path.basename(mp3)
-        )
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return {
-
-            "status":
-                "failed",
-
-            "error":
-                str(e)
-        }
-
-# =========================================================
-# REDIRECT STREAM
-# =========================================================
-
-@app.get("/redirect")
-def redirect(url: str):
-
-    try:
-
-        url = clean_url(url)
-
-        opts = yt_opts()
-
-        with yt_dlp.YoutubeDL(opts) as ydl:
-
-            data = ydl.extract_info(
-                url,
-                download=False
+            filename=os.path.basename(
+                mp3
             )
-
-        stream_url = get_stream_url(data)
-
-        if not stream_url:
-
-            return {
-
-                "status":
-                    "failed",
-
-                "error":
-                    "No redirect stream URL found"
-            }
-
-        return RedirectResponse(
-            url=stream_url
         )
 
     except Exception as e:
 
         traceback.print_exc()
 
-        return {
-
-            "status":
-                "failed",
-
-            "error":
-                str(e)
-        }
-
-# =========================================================
-# HEALTH
-# =========================================================
-
-@app.get("/health")
-def health():
-
-    return {
-
-        "status":
-            "healthy"
-    }
+        return failed(e)
 
 # =========================================================
 # STARTUP
 # =========================================================
 
 print("===================================")
-print("YouTube Downloader API Started")
+print("Stable YouTube Downloader Started")
 print("===================================")
