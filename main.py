@@ -19,8 +19,8 @@ socket.setdefaulttimeout(120)
 # =========================================================
 
 app = FastAPI(
-    title="Video Downloader API",
-    version="1.0"
+    title="Ultimate Downloader API",
+    version="2026.1"
 )
 
 # =========================================================
@@ -44,7 +44,7 @@ DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # =========================================================
-# SUPPORTED
+# SUPPORTED DOMAINS
 # =========================================================
 
 SUPPORTED = [
@@ -95,7 +95,7 @@ def clean_url(url: str):
 
         url = url.split("&pp=")[0]
 
-    # shorts support
+    # shorts -> watch
     if "youtube.com/shorts/" in url:
 
         vid = (
@@ -116,11 +116,21 @@ def clean_url(url: str):
 
 def ydl_opts(outtmpl=None, audio=False):
 
-    fmt = (
-        "bestaudio/best"
-        if audio else
-        "bestvideo+bestaudio/best"
-    )
+    # SAFE FORMAT FALLBACKS
+    if audio:
+
+        fmt = (
+            "bestaudio/best"
+        )
+
+    else:
+
+        fmt = (
+            "best[ext=mp4]/"
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
+            "bestvideo+bestaudio/"
+            "best"
+        )
 
     opts = {
 
@@ -146,6 +156,8 @@ def ydl_opts(outtmpl=None, audio=False):
 
         "extract_flat": False,
 
+        "merge_output_format": "mp4",
+
         "http_headers": {
 
             "User-Agent":
@@ -161,30 +173,33 @@ def ydl_opts(outtmpl=None, audio=False):
                 "en-US,en;q=0.9",
         },
 
+        # IMPORTANT FOR YOUTUBE
         "extractor_args": {
 
             "youtube": {
 
                 "player_client": [
-                    "web"
+                    "android",
+                    "web",
+                    "ios"
                 ]
             }
         }
     }
 
-    # output
+    # OUTPUT
     if outtmpl:
 
         opts["outtmpl"] = outtmpl
 
-    # ffmpeg
+    # FFMPEG
     ffmpeg = shutil.which("ffmpeg")
 
     if ffmpeg:
 
         opts["ffmpeg_location"] = ffmpeg
 
-    # cookies.txt support
+    # YOUTUBE COOKIES
     if os.path.exists("cookies.txt"):
 
         opts["cookiefile"] = "cookies.txt"
@@ -199,19 +214,17 @@ def failed(error):
 
     return JSONResponse({
 
-        "status":
-            "failed",
-
-        "error":
-            str(error)
+        "status": "failed",
+        "error": str(error)
     })
 
 # =========================================================
-# GET STREAM URL
+# STREAM PICKER
 # =========================================================
 
 def get_stream(data, audio=False):
 
+    # direct stream
     if data.get("url"):
 
         return data["url"]
@@ -222,11 +235,13 @@ def get_stream(data, audio=False):
 
         return None
 
+    # reverse for better quality first
     for f in reversed(formats):
 
         if not f.get("url"):
             continue
 
+        # audio filter
         if audio:
 
             if f.get("acodec") == "none":
@@ -245,11 +260,23 @@ def home():
 
     return {
 
-        "status":
-            "running",
+        "status": "running",
 
-        "engine":
-            "stable-production"
+        "engine": "stable-youtube-engine",
+
+        "features": [
+
+            "youtube",
+            "facebook",
+            "instagram",
+            "tiktok",
+            "twitter",
+            "shorts support",
+            "audio download",
+            "video download",
+            "stream extraction",
+            "cookies support"
+        ]
     }
 
 # =========================================================
@@ -280,8 +307,7 @@ def info(url: str):
 
         return {
 
-            "status":
-                "success",
+            "status": "success",
 
             "title":
                 data.get("title"),
@@ -293,7 +319,10 @@ def info(url: str):
                 data.get("duration"),
 
             "uploader":
-                data.get("uploader")
+                data.get("uploader"),
+
+            "view_count":
+                data.get("view_count")
         }
 
     except Exception as e:
@@ -328,24 +357,17 @@ def stream(url: str):
                 download=False
             )
 
-        if not data:
-
-            return failed(
-                "No media found"
-            )
-
         stream_url = get_stream(data)
 
         if not stream_url:
 
             return failed(
-                "No stream URL found"
+                "No stream found"
             )
 
         return {
 
-            "status":
-                "success",
+            "status": "success",
 
             "title":
                 data.get("title"),
@@ -400,13 +422,12 @@ def audio_stream(url: str):
         if not audio_url:
 
             return failed(
-                "No audio stream found"
+                "No audio found"
             )
 
         return {
 
-            "status":
-                "success",
+            "status": "success",
 
             "title":
                 data.get("title"),
@@ -461,6 +482,7 @@ def download(url: str):
                 data
             )
 
+        # merged correction
         base = filename.rsplit(".", 1)[0]
 
         mp4 = base + ".mp4"
@@ -521,6 +543,7 @@ def audio(url: str):
             audio=True
         )
 
+        # MP3 CONVERSION
         opts["postprocessors"] = [{
 
             "key":
@@ -581,8 +604,7 @@ def health():
 
     return {
 
-        "status":
-            "healthy"
+        "status": "healthy"
     }
 
 # =========================================================
@@ -590,5 +612,5 @@ def health():
 # =========================================================
 
 print("===================================")
-print("Downloader API Started")
+print("Ultimate Downloader API Started")
 print("===================================")
