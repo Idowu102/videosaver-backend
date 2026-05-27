@@ -9,7 +9,7 @@ import socket
 import traceback
 
 # =========================================================
-# SOCKET TIMEOUT
+# SOCKET
 # =========================================================
 
 socket.setdefaulttimeout(120)
@@ -19,8 +19,8 @@ socket.setdefaulttimeout(120)
 # =========================================================
 
 app = FastAPI(
-    title="Ultimate Video Downloader API",
-    version="2026.8"
+    title="Video Downloader API",
+    version="1.0"
 )
 
 # =========================================================
@@ -44,7 +44,7 @@ DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # =========================================================
-# SUPPORTED PLATFORMS
+# SUPPORTED
 # =========================================================
 
 SUPPORTED = [
@@ -64,7 +64,7 @@ SUPPORTED = [
 ]
 
 # =========================================================
-# PLATFORM CHECK
+# CHECK URL
 # =========================================================
 
 def supported(url: str):
@@ -85,7 +85,7 @@ def clean_url(url: str):
         "www.youtube.com"
     )
 
-    # remove youtube playlist
+    # remove playlist
     if "&list=" in url:
 
         url = url.split("&list=")[0]
@@ -95,7 +95,7 @@ def clean_url(url: str):
 
         url = url.split("&pp=")[0]
 
-    # youtube shorts
+    # shorts support
     if "youtube.com/shorts/" in url:
 
         vid = (
@@ -124,15 +124,7 @@ def ydl_opts(outtmpl=None, audio=False):
 
     opts = {
 
-        # =================================================
-        # FORMAT
-        # =================================================
-
         "format": fmt,
-
-        # =================================================
-        # GENERAL
-        # =================================================
 
         "quiet": True,
 
@@ -154,10 +146,6 @@ def ydl_opts(outtmpl=None, audio=False):
 
         "extract_flat": False,
 
-        # =================================================
-        # HEADERS
-        # =================================================
-
         "http_headers": {
 
             "User-Agent":
@@ -173,10 +161,6 @@ def ydl_opts(outtmpl=None, audio=False):
                 "en-US,en;q=0.9",
         },
 
-        # =================================================
-        # YOUTUBE
-        # =================================================
-
         "extractor_args": {
 
             "youtube": {
@@ -188,51 +172,27 @@ def ydl_opts(outtmpl=None, audio=False):
         }
     }
 
-    # =====================================================
-    # OUTPUT
-    # =====================================================
-
+    # output
     if outtmpl:
 
         opts["outtmpl"] = outtmpl
 
-    # =====================================================
-    # FFMPEG
-    # =====================================================
-
+    # ffmpeg
     ffmpeg = shutil.which("ffmpeg")
 
     if ffmpeg:
 
         opts["ffmpeg_location"] = ffmpeg
 
-    # =====================================================
-    # COOKIES.TXT
-    # =====================================================
-
+    # cookies.txt support
     if os.path.exists("cookies.txt"):
 
         opts["cookiefile"] = "cookies.txt"
 
-    # =====================================================
-    # BROWSER COOKIES
-    # =====================================================
-
-    try:
-
-        import browser_cookie3
-
-        opts["cookiesfrombrowser"] = (
-            "chrome",
-        )
-
-    except:
-        pass
-
     return opts
 
 # =========================================================
-# SAFE RESPONSE
+# SAFE ERROR
 # =========================================================
 
 def failed(error):
@@ -252,7 +212,6 @@ def failed(error):
 
 def get_stream(data, audio=False):
 
-    # direct
     if data.get("url"):
 
         return data["url"]
@@ -263,7 +222,6 @@ def get_stream(data, audio=False):
 
         return None
 
-    # best first
     for f in reversed(formats):
 
         if not f.get("url"):
@@ -291,22 +249,7 @@ def home():
             "running",
 
         "engine":
-            "Ultimate Production Engine",
-
-        "features": [
-
-            "youtube",
-            "facebook reels",
-            "instagram",
-            "tiktok",
-            "twitter x",
-            "video download",
-            "audio mp3",
-            "stream extraction",
-            "cookies support",
-            "ffmpeg merge",
-            "shorts support"
-        ]
+            "stable-production"
     }
 
 # =========================================================
@@ -350,13 +293,7 @@ def info(url: str):
                 data.get("duration"),
 
             "uploader":
-                data.get("uploader"),
-
-            "view_count":
-                data.get("view_count"),
-
-            "webpage_url":
-                data.get("webpage_url")
+                data.get("uploader")
         }
 
     except Exception as e:
@@ -524,7 +461,6 @@ def download(url: str):
                 data
             )
 
-        # merged correction
         base = filename.rsplit(".", 1)[0]
 
         mp4 = base + ".mp4"
@@ -654,5 +590,5 @@ def health():
 # =========================================================
 
 print("===================================")
-print("Ultimate Downloader Started")
+print("Downloader API Started")
 print("===================================")
