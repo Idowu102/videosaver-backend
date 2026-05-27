@@ -19,8 +19,8 @@ socket.setdefaulttimeout(120)
 # =========================================================
 
 app = FastAPI(
-    title="Stable YouTube Downloader API",
-    version="2026.5"
+    title="Ultimate Video Downloader API",
+    version="2026.8"
 )
 
 # =========================================================
@@ -44,16 +44,32 @@ DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # =========================================================
-# URL CHECK
+# SUPPORTED PLATFORMS
 # =========================================================
 
-def is_youtube(url: str):
+SUPPORTED = [
 
-    return any(x in url for x in [
+    "youtube.com",
+    "youtu.be",
 
-        "youtube.com",
-        "youtu.be"
-    ])
+    "facebook.com",
+    "fb.watch",
+
+    "instagram.com",
+
+    "tiktok.com",
+
+    "twitter.com",
+    "x.com"
+]
+
+# =========================================================
+# PLATFORM CHECK
+# =========================================================
+
+def supported(url: str):
+
+    return any(x in url for x in SUPPORTED)
 
 # =========================================================
 # CLEAN URL
@@ -63,13 +79,13 @@ def clean_url(url: str):
 
     url = url.strip()
 
-    # mobile -> desktop
+    # mobile youtube
     url = url.replace(
         "m.youtube.com",
         "www.youtube.com"
     )
 
-    # remove playlist
+    # remove youtube playlist
     if "&list=" in url:
 
         url = url.split("&list=")[0]
@@ -79,17 +95,17 @@ def clean_url(url: str):
 
         url = url.split("&pp=")[0]
 
-    # shorts support
+    # youtube shorts
     if "youtube.com/shorts/" in url:
 
-        video_id = (
+        vid = (
             url.split("/shorts/")[1]
             .split("?")[0]
         )
 
         url = (
             "https://www.youtube.com/watch?v="
-            f"{video_id}"
+            f"{vid}"
         )
 
     return url
@@ -100,13 +116,10 @@ def clean_url(url: str):
 
 def ydl_opts(outtmpl=None, audio=False):
 
-    # IMPORTANT:
-    # Avoid unstable DASH extraction
-
     fmt = (
         "bestaudio/best"
         if audio else
-        "best[ext=mp4]/best"
+        "bestvideo+bestaudio/best"
     )
 
     opts = {
@@ -161,7 +174,7 @@ def ydl_opts(outtmpl=None, audio=False):
         },
 
         # =================================================
-        # YOUTUBE CLIENT
+        # YOUTUBE
         # =================================================
 
         "extractor_args": {
@@ -194,12 +207,27 @@ def ydl_opts(outtmpl=None, audio=False):
         opts["ffmpeg_location"] = ffmpeg
 
     # =====================================================
-    # COOKIES
+    # COOKIES.TXT
     # =====================================================
 
     if os.path.exists("cookies.txt"):
 
         opts["cookiefile"] = "cookies.txt"
+
+    # =====================================================
+    # BROWSER COOKIES
+    # =====================================================
+
+    try:
+
+        import browser_cookie3
+
+        opts["cookiesfrombrowser"] = (
+            "chrome",
+        )
+
+    except:
+        pass
 
     return opts
 
@@ -211,14 +239,47 @@ def failed(error):
 
     return JSONResponse({
 
-        "status": "failed",
+        "status":
+            "failed",
 
-        "error": str(error)
-
+        "error":
+            str(error)
     })
 
 # =========================================================
-# HEALTH
+# GET STREAM URL
+# =========================================================
+
+def get_stream(data, audio=False):
+
+    # direct
+    if data.get("url"):
+
+        return data["url"]
+
+    formats = data.get("formats", [])
+
+    if not formats:
+
+        return None
+
+    # best first
+    for f in reversed(formats):
+
+        if not f.get("url"):
+            continue
+
+        if audio:
+
+            if f.get("acodec") == "none":
+                continue
+
+        return f["url"]
+
+    return None
+
+# =========================================================
+# HOME
 # =========================================================
 
 @app.get("/")
@@ -230,21 +291,21 @@ def home():
             "running",
 
         "engine":
-            "Stable Production Engine",
-
-        "version":
-            "2026.5",
+            "Ultimate Production Engine",
 
         "features": [
 
-            "youtube download",
-            "youtube audio",
-            "youtube stream",
-            "shorts support",
-            "mobile youtube support",
-            "ffmpeg support",
+            "youtube",
+            "facebook reels",
+            "instagram",
+            "tiktok",
+            "twitter x",
+            "video download",
+            "audio mp3",
+            "stream extraction",
             "cookies support",
-            "stable extraction"
+            "ffmpeg merge",
+            "shorts support"
         ]
     }
 
@@ -257,10 +318,10 @@ def info(url: str):
 
     try:
 
-        if not is_youtube(url):
+        if not supported(url):
 
             return failed(
-                "Only YouTube URLs supported"
+                "Unsupported URL"
             )
 
         url = clean_url(url)
@@ -292,7 +353,10 @@ def info(url: str):
                 data.get("uploader"),
 
             "view_count":
-                data.get("view_count")
+                data.get("view_count"),
+
+            "webpage_url":
+                data.get("webpage_url")
         }
 
     except Exception as e:
@@ -310,10 +374,10 @@ def stream(url: str):
 
     try:
 
-        if not is_youtube(url):
+        if not supported(url):
 
             return failed(
-                "Only YouTube URLs supported"
+                "Unsupported URL"
             )
 
         url = clean_url(url)
@@ -327,19 +391,13 @@ def stream(url: str):
                 download=False
             )
 
-        stream_url = data.get("url")
+        if not data:
 
-        # fallback
-        if not stream_url:
+            return failed(
+                "No media found"
+            )
 
-            for f in reversed(
-                data.get("formats", [])
-            ):
-
-                if f.get("url"):
-
-                    stream_url = f["url"]
-                    break
+        stream_url = get_stream(data)
 
         if not stream_url:
 
@@ -372,6 +430,64 @@ def stream(url: str):
         return failed(e)
 
 # =========================================================
+# AUDIO STREAM
+# =========================================================
+
+@app.get("/audio-stream")
+def audio_stream(url: str):
+
+    try:
+
+        if not supported(url):
+
+            return failed(
+                "Unsupported URL"
+            )
+
+        url = clean_url(url)
+
+        with yt_dlp.YoutubeDL(
+            ydl_opts(audio=True)
+        ) as ydl:
+
+            data = ydl.extract_info(
+                url,
+                download=False
+            )
+
+        audio_url = get_stream(
+            data,
+            audio=True
+        )
+
+        if not audio_url:
+
+            return failed(
+                "No audio stream found"
+            )
+
+        return {
+
+            "status":
+                "success",
+
+            "title":
+                data.get("title"),
+
+            "thumbnail":
+                data.get("thumbnail"),
+
+            "audio_url":
+                audio_url
+        }
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return failed(e)
+
+# =========================================================
 # VIDEO DOWNLOAD
 # =========================================================
 
@@ -380,23 +496,23 @@ def download(url: str):
 
     try:
 
-        if not is_youtube(url):
+        if not supported(url):
 
             return failed(
-                "Only YouTube URLs supported"
+                "Unsupported URL"
             )
 
         url = clean_url(url)
 
         uid = str(uuid.uuid4())
 
-        output_template = os.path.join(
+        output = os.path.join(
             DOWNLOAD_DIR,
             f"{uid}.%(ext)s"
         )
 
         with yt_dlp.YoutubeDL(
-            ydl_opts(output_template)
+            ydl_opts(output)
         ) as ydl:
 
             data = ydl.extract_info(
@@ -408,7 +524,7 @@ def download(url: str):
                 data
             )
 
-        # merged mp4 correction
+        # merged correction
         base = filename.rsplit(".", 1)[0]
 
         mp4 = base + ".mp4"
@@ -449,29 +565,25 @@ def audio(url: str):
 
     try:
 
-        if not is_youtube(url):
+        if not supported(url):
 
             return failed(
-                "Only YouTube URLs supported"
+                "Unsupported URL"
             )
 
         url = clean_url(url)
 
         uid = str(uuid.uuid4())
 
-        output_template = os.path.join(
+        output = os.path.join(
             DOWNLOAD_DIR,
             f"{uid}.%(ext)s"
         )
 
         opts = ydl_opts(
-            output_template,
+            output,
             audio=True
         )
-
-        # =================================================
-        # MP3 CONVERSION
-        # =================================================
 
         opts["postprocessors"] = [{
 
@@ -525,9 +637,22 @@ def audio(url: str):
         return failed(e)
 
 # =========================================================
+# HEALTH
+# =========================================================
+
+@app.get("/health")
+def health():
+
+    return {
+
+        "status":
+            "healthy"
+    }
+
+# =========================================================
 # STARTUP
 # =========================================================
 
 print("===================================")
-print("Stable YouTube Downloader Started")
+print("Ultimate Downloader Started")
 print("===================================")
