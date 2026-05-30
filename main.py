@@ -3,15 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import yt_dlp
 import traceback
-import redis
-import json
-import hashlib
 
-# =========================
-# APP
-# =========================
-
-app = FastAPI(title="Resilient Media API")
+app = FastAPI(title="Stable Media API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,95 +15,80 @@ app.add_middleware(
 )
 
 # =========================
-# REDIS (CACHE LAYER)
-# =========================
-
-r = redis.Redis(host="localhost", port=6379, decode_responses=True)
-
-CACHE_TTL = 3600 * 24  # 24 hours
-
-# =========================
-# SUPPORTED
+# SUPPORT CHECK
 # =========================
 
 SUPPORTED = ["youtube.com", "youtu.be"]
 
-def supported(url):
+def supported(url: str):
     return any(x in url for x in SUPPORTED)
-
-# =========================
-# CACHE KEY
-# =========================
-
-def key(url):
-    return hashlib.md5(url.encode()).hexdigest()
 
 # =========================
 # CLEAN URL
 # =========================
 
-def clean(url):
+def clean_url(url: str):
+    url = url.strip()
+
     if "youtube.com/shorts/" in url:
         vid = url.split("/shorts/")[1].split("?")[0]
         return f"https://www.youtube.com/watch?v={vid}"
+
     return url
 
 # =========================
-# CACHE HELPERS
+# SAFE YT-DLP OPTIONS
 # =========================
 
-def get_cache(k):
-    v = r.get(k)
-    return json.loads(v) if v else None
-
-def set_cache(k, v):
-    r.setex(k, CACHE_TTL, json.dumps(v))
-
-# =========================
-# YT-DLP OPTIONS (SAFE)
-# =========================
-
-def opts():
+def ydl_opts():
     return {
         "format": "bv*+ba/best",
         "noplaylist": True,
         "quiet": True,
-        "retries": 2,
-        "fragment_retries": 2,
-        "socket_timeout": 20,
+        "no_warnings": True,
+        "retries": 3,
+        "fragment_retries": 3,
+        "socket_timeout": 30,
         "ignoreerrors": False,
         "extractor_args": {
             "youtube": {
                 "player_client": ["android", "web"]
             }
+        },
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0"
         }
     }
 
 # =========================
-# SAFE EXTRACT
+# SAFE RESPONSE
 # =========================
 
-def extract(url):
+def fail(msg):
+    return JSONResponse({
+        "status": "failed",
+        "error": str(msg)
+    })
+
+# =========================
+# EXTRACT SAFE
+# =========================
+
+def extract(url: str):
     try:
-        with yt_dlp.YoutubeDL(opts()) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
             data = ydl.extract_info(url, download=False)
 
-        if not isinstance(data, dict):
-            return None
-
-        return data
-
-    except yt_dlp.utils.DownloadError as e:
-        return {"error": "blocked_by_youtube", "detail": str(e)}
+        return data if isinstance(data, dict) else None
 
     except Exception as e:
-        return {"error": "network_or_unknown", "detail": str(e)}
+        return {"error": str(e)}
 
 # =========================
-# STREAM PICK
+# STREAM PICKER
 # =========================
 
-def pick(data):
+def get_stream(data):
     if not isinstance(data, dict):
         return None
 
@@ -120,7 +98,7 @@ def pick(data):
         return data.get("url")
 
     for f in reversed(formats):
-        if f and f.get("url"):
+        if isinstance(f, dict) and f.get("url"):
             return f["url"]
 
     return None
@@ -132,34 +110,26 @@ def pick(data):
 @app.get("/info")
 def info(url: str):
 
-    if not supported(url):
-        return JSONResponse({"status": "failed", "error": "unsupported"})
+    try:
+        if not supported(url):
+            return fail("unsupported url")
 
-    url = clean(url)
-    k = key("info:" + url)
+        url = clean_url(url)
+        data = extract(url)
 
-    cached = get_cache(k)
-    if cached:
-        return {"status": "cached", "data": cached}
+        if not data or "error" in data:
+            return fail("extract failed or blocked")
 
-    data = extract(url)
+        return {
+            "status": "success",
+            "title": data.get("title"),
+            "duration": data.get("duration"),
+            "thumbnail": data.get("thumbnail")
+        }
 
-    if isinstance(data, dict) and "error" in data:
-        set_cache(k, data)
-        return JSONResponse({"status": "failed", **data})
-
-    if not data:
-        return JSONResponse({"status": "failed", "error": "extract_failed"})
-
-    result = {
-        "title": data.get("title"),
-        "duration": data.get("duration"),
-        "thumbnail": data.get("thumbnail")
-    }
-
-    set_cache(k, result)
-
-    return {"status": "success", "data": result}
+    except Exception as e:
+        traceback.print_exc()
+        return fail(e)
 
 # =========================
 # STREAM
@@ -168,34 +138,30 @@ def info(url: str):
 @app.get("/stream")
 def stream(url: str):
 
-    if not supported(url):
-        return JSONResponse({"status": "failed", "error": "unsupported"})
+    try:
+        if not supported(url):
+            return fail("unsupported url")
 
-    url = clean(url)
-    k = key("stream:" + url)
+        url = clean_url(url)
+        data = extract(url)
 
-    cached = get_cache(k)
-    if cached:
-        return {"status": "cached", "stream": cached}
+        if not data or "error" in data:
+            return fail("extract failed or blocked by youtube")
 
-    data = extract(url)
+        stream_url = get_stream(data)
 
-    if isinstance(data, dict) and "error" in data:
-        set_cache(k, data)
-        return JSONResponse({"status": "failed", **data})
+        if not stream_url:
+            return fail("no stream found")
 
-    stream_url = pick(data)
+        return {
+            "status": "success",
+            "title": data.get("title"),
+            "stream_url": stream_url
+        }
 
-    if not stream_url:
-        return JSONResponse({"status": "failed", "error": "no_stream_found"})
-
-    set_cache(k, stream_url)
-
-    return {
-        "status": "success",
-        "stream": stream_url,
-        "title": data.get("title")
-    }
+    except Exception as e:
+        traceback.print_exc()
+        return fail(e)
 
 # =========================
 # AUDIO
@@ -204,37 +170,42 @@ def stream(url: str):
 @app.get("/audio")
 def audio(url: str):
 
-    if not supported(url):
-        return JSONResponse({"status": "failed", "error": "unsupported"})
+    try:
+        if not supported(url):
+            return fail("unsupported url")
 
-    url = clean(url)
-    k = key("audio:" + url)
+        url = clean_url(url)
 
-    cached = get_cache(k)
-    if cached:
-        return {"status": "cached", "audio": cached}
+        # audio mode
+        opts = ydl_opts()
+        opts["format"] = "bestaudio/best"
 
-    data = extract(url)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                data = ydl.extract_info(url, download=False)
+        except Exception as e:
+            return fail(str(e))
 
-    if isinstance(data, dict) and "error" in data:
-        set_cache(k, data)
-        return JSONResponse({"status": "failed", **data})
+        if not data or "error" in data:
+            return fail("audio extract failed")
 
-    audio_url = pick(data)
+        audio_url = get_stream(data)
 
-    if not audio_url:
-        return JSONResponse({"status": "failed", "error": "no_audio_found"})
+        if not audio_url:
+            return fail("no audio found")
 
-    set_cache(k, audio_url)
+        return {
+            "status": "success",
+            "title": data.get("title"),
+            "audio_url": audio_url
+        }
 
-    return {
-        "status": "success",
-        "audio": audio_url,
-        "title": data.get("title")
-    }
+    except Exception as e:
+        traceback.print_exc()
+        return fail(e)
 
 # =========================
-# HEALTH
+# HEALTH CHECK
 # =========================
 
 @app.get("/health")
