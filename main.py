@@ -3,9 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import yt_dlp
 import traceback
-import os
+import redis
+import json
+import hashlib
 
-app = FastAPI(title="Robust Media API")
+# =========================
+# APP
+# =========================
+
+app = FastAPI(title="Resilient Media API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,51 +22,62 @@ app.add_middleware(
 )
 
 # =========================
-# OPTIONAL COOKIES SUPPORT
+# REDIS (CACHE LAYER)
 # =========================
 
-COOKIES_FILE = "cookies.txt"
-USE_COOKIES = os.path.exists(COOKIES_FILE)
+r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
-SUPPORTED = [
-    "youtube.com",
-    "youtu.be",
-    "facebook.com",
-    "instagram.com",
-    "tiktok.com",
-    "twitter.com",
-    "x.com",
-]
+CACHE_TTL = 3600 * 24  # 24 hours
 
-def supported(url: str):
+# =========================
+# SUPPORTED
+# =========================
+
+SUPPORTED = ["youtube.com", "youtu.be"]
+
+def supported(url):
     return any(x in url for x in SUPPORTED)
+
+# =========================
+# CACHE KEY
+# =========================
+
+def key(url):
+    return hashlib.md5(url.encode()).hexdigest()
 
 # =========================
 # CLEAN URL
 # =========================
 
-def clean_url(url: str):
-    url = url.strip()
-
+def clean(url):
     if "youtube.com/shorts/" in url:
         vid = url.split("/shorts/")[1].split("?")[0]
         return f"https://www.youtube.com/watch?v={vid}"
-
     return url
 
 # =========================
-# SAFE YT-DLP OPTIONS
+# CACHE HELPERS
 # =========================
 
-def ydl_opts(audio=False):
-    opts = {
-        "format": "bv*+ba/best/best",
+def get_cache(k):
+    v = r.get(k)
+    return json.loads(v) if v else None
+
+def set_cache(k, v):
+    r.setex(k, CACHE_TTL, json.dumps(v))
+
+# =========================
+# YT-DLP OPTIONS (SAFE)
+# =========================
+
+def opts():
+    return {
+        "format": "bv*+ba/best",
         "noplaylist": True,
         "quiet": True,
-        "no_warnings": True,
-        "retries": 3,
-        "fragment_retries": 3,
-        "socket_timeout": 30,
+        "retries": 2,
+        "fragment_retries": 2,
+        "socket_timeout": 20,
         "ignoreerrors": False,
         "extractor_args": {
             "youtube": {
@@ -69,60 +86,31 @@ def ydl_opts(audio=False):
         }
     }
 
-    if audio:
-        opts["format"] = "bestaudio/best"
-
-    if USE_COOKIES:
-        opts["cookiefile"] = COOKIES_FILE
-
-    return opts
-
 # =========================
-# ERROR RESPONSE
+# SAFE EXTRACT
 # =========================
 
-def fail(msg):
-    return JSONResponse({
-        "status": "failed",
-        "error": str(msg)
-    })
-
-# =========================
-# SAFE EXTRACT (WITH FALLBACK)
-# =========================
-
-def extract(url: str, audio=False):
-
+def extract(url):
     try:
-        with yt_dlp.YoutubeDL(ydl_opts(audio=audio)) as ydl:
+        with yt_dlp.YoutubeDL(opts()) as ydl:
             data = ydl.extract_info(url, download=False)
 
-        if isinstance(data, dict):
-            return data
-
-        return None
-
-    except Exception:
-        # 🔥 fallback mode (weaker but more compatible)
-        try:
-            with yt_dlp.YoutubeDL({
-                "format": "worst/best",
-                "quiet": True,
-                "noplaylist": True
-            }) as ydl:
-                data = ydl.extract_info(url, download=False)
-
-            return data if isinstance(data, dict) else None
-
-        except Exception:
+        if not isinstance(data, dict):
             return None
 
+        return data
+
+    except yt_dlp.utils.DownloadError as e:
+        return {"error": "blocked_by_youtube", "detail": str(e)}
+
+    except Exception as e:
+        return {"error": "network_or_unknown", "detail": str(e)}
+
 # =========================
-# STREAM PICKER
+# STREAM PICK
 # =========================
 
-def get_stream(data, audio=False):
-
+def pick(data):
     if not isinstance(data, dict):
         return None
 
@@ -131,23 +119,11 @@ def get_stream(data, audio=False):
     if not formats:
         return data.get("url")
 
-    best = None
+    for f in reversed(formats):
+        if f and f.get("url"):
+            return f["url"]
 
-    for f in formats:
-        if not isinstance(f, dict):
-            continue
-
-        if not f.get("url"):
-            continue
-
-        if audio and f.get("acodec") == "none":
-            continue
-        if not audio and f.get("vcodec") == "none":
-            continue
-
-        best = f
-
-    return best["url"] if best else data.get("url")
+    return None
 
 # =========================
 # INFO
@@ -156,27 +132,34 @@ def get_stream(data, audio=False):
 @app.get("/info")
 def info(url: str):
 
-    try:
-        if not supported(url):
-            return fail("unsupported url")
+    if not supported(url):
+        return JSONResponse({"status": "failed", "error": "unsupported"})
 
-        url = clean_url(url)
-        data = extract(url)
+    url = clean(url)
+    k = key("info:" + url)
 
-        if not data:
-            return fail("yt-dlp failed (blocked or unavailable)")
+    cached = get_cache(k)
+    if cached:
+        return {"status": "cached", "data": cached}
 
-        return {
-            "status": "success",
-            "title": data.get("title"),
-            "duration": data.get("duration"),
-            "thumbnail": data.get("thumbnail"),
-            "uploader": data.get("uploader"),
-        }
+    data = extract(url)
 
-    except Exception as e:
-        traceback.print_exc()
-        return fail(e)
+    if isinstance(data, dict) and "error" in data:
+        set_cache(k, data)
+        return JSONResponse({"status": "failed", **data})
+
+    if not data:
+        return JSONResponse({"status": "failed", "error": "extract_failed"})
+
+    result = {
+        "title": data.get("title"),
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail")
+    }
+
+    set_cache(k, result)
+
+    return {"status": "success", "data": result}
 
 # =========================
 # STREAM
@@ -185,30 +168,34 @@ def info(url: str):
 @app.get("/stream")
 def stream(url: str):
 
-    try:
-        if not supported(url):
-            return fail("unsupported url")
+    if not supported(url):
+        return JSONResponse({"status": "failed", "error": "unsupported"})
 
-        url = clean_url(url)
-        data = extract(url)
+    url = clean(url)
+    k = key("stream:" + url)
 
-        if not data:
-            return fail("blocked_or_failed_extraction")
+    cached = get_cache(k)
+    if cached:
+        return {"status": "cached", "stream": cached}
 
-        stream_url = get_stream(data, audio=False)
+    data = extract(url)
 
-        if not stream_url:
-            return fail("no_stream_found")
+    if isinstance(data, dict) and "error" in data:
+        set_cache(k, data)
+        return JSONResponse({"status": "failed", **data})
 
-        return {
-            "status": "success",
-            "title": data.get("title"),
-            "stream_url": stream_url
-        }
+    stream_url = pick(data)
 
-    except Exception as e:
-        traceback.print_exc()
-        return fail(e)
+    if not stream_url:
+        return JSONResponse({"status": "failed", "error": "no_stream_found"})
+
+    set_cache(k, stream_url)
+
+    return {
+        "status": "success",
+        "stream": stream_url,
+        "title": data.get("title")
+    }
 
 # =========================
 # AUDIO
@@ -217,30 +204,34 @@ def stream(url: str):
 @app.get("/audio")
 def audio(url: str):
 
-    try:
-        if not supported(url):
-            return fail("unsupported url")
+    if not supported(url):
+        return JSONResponse({"status": "failed", "error": "unsupported"})
 
-        url = clean_url(url)
-        data = extract(url, audio=True)
+    url = clean(url)
+    k = key("audio:" + url)
 
-        if not data:
-            return fail("blocked_or_failed_extraction")
+    cached = get_cache(k)
+    if cached:
+        return {"status": "cached", "audio": cached}
 
-        audio_url = get_stream(data, audio=True)
+    data = extract(url)
 
-        if not audio_url:
-            return fail("no_audio_found")
+    if isinstance(data, dict) and "error" in data:
+        set_cache(k, data)
+        return JSONResponse({"status": "failed", **data})
 
-        return {
-            "status": "success",
-            "title": data.get("title"),
-            "audio_url": audio_url
-        }
+    audio_url = pick(data)
 
-    except Exception as e:
-        traceback.print_exc()
-        return fail(e)
+    if not audio_url:
+        return JSONResponse({"status": "failed", "error": "no_audio_found"})
+
+    set_cache(k, audio_url)
+
+    return {
+        "status": "success",
+        "audio": audio_url,
+        "title": data.get("title")
+    }
 
 # =========================
 # HEALTH
