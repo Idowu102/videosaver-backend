@@ -40,7 +40,6 @@ app.add_middleware(
 # =========================================================
 
 DOWNLOAD_DIR = "downloads"
-
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # =========================================================
@@ -48,27 +47,17 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # =========================================================
 
 SUPPORTED = [
-
     "youtube.com",
     "youtu.be",
-
     "facebook.com",
     "fb.watch",
-
     "instagram.com",
-
     "tiktok.com",
-
     "twitter.com",
     "x.com"
 ]
 
-# =========================================================
-# CHECK URL
-# =========================================================
-
 def supported(url: str):
-
     return any(x in url for x in SUPPORTED)
 
 # =========================================================
@@ -76,180 +65,127 @@ def supported(url: str):
 # =========================================================
 
 def clean_url(url: str):
-
     url = url.strip()
 
-    # mobile youtube
-    url = url.replace(
-        "m.youtube.com",
-        "www.youtube.com"
-    )
+    url = url.replace("m.youtube.com", "www.youtube.com")
 
-    # remove playlist
     if "&list=" in url:
-
         url = url.split("&list=")[0]
 
-    # remove pp
     if "&pp=" in url:
-
         url = url.split("&pp=")[0]
 
-    # shorts -> watch
     if "youtube.com/shorts/" in url:
-
-        vid = (
-            url.split("/shorts/")[1]
-            .split("?")[0]
-        )
-
-        url = (
-            "https://www.youtube.com/watch?v="
-            f"{vid}"
-        )
+        vid = url.split("/shorts/")[1].split("?")[0]
+        url = f"https://www.youtube.com/watch?v={vid}"
 
     return url
 
 # =========================================================
-# yt-dlp OPTIONS
+# yt-dlp OPTIONS (FIXED)
 # =========================================================
 
 def ydl_opts(outtmpl=None, audio=False):
 
-    # SAFE FORMAT FALLBACKS
+    # ✅ FIXED FORMAT SELECTION (IMPORTANT)
     if audio:
-
-        fmt = (
-            "bestaudio/best"
-        )
-
+        fmt = "bestaudio/best"
     else:
-
-        fmt = (
-            "best[ext=mp4]/"
-            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
-            "bestvideo+bestaudio/"
-            "best"
-        )
+        fmt = "bv*+ba/best"
 
     opts = {
-
         "format": fmt,
 
         "quiet": True,
-
         "no_warnings": True,
-
         "noplaylist": True,
-
         "nocheckcertificate": True,
-
         "ignoreerrors": False,
 
         "geo_bypass": True,
-
         "retries": 10,
-
         "fragment_retries": 10,
-
         "socket_timeout": 120,
 
         "extract_flat": False,
 
-        "merge_output_format": "mp4",
+        # safer than forcing mp4
+        "merge_output_format": "mkv",
 
         "http_headers": {
-
-            "User-Agent":
-                (
-                    "Mozilla/5.0 "
-                    "(Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) "
-                    "Chrome/124.0 Safari/537.36"
-                ),
-
-            "Accept-Language":
-                "en-US,en;q=0.9",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
         },
 
-        # IMPORTANT FOR YOUTUBE
         "extractor_args": {
-
             "youtube": {
-
-                "player_client": [
-                    "android",
-                    "web",
-                    "ios"
-                ]
+                "player_client": ["android", "web", "ios"]
             }
         }
     }
 
-    # OUTPUT
     if outtmpl:
-
         opts["outtmpl"] = outtmpl
 
-    # FFMPEG
     ffmpeg = shutil.which("ffmpeg")
-
     if ffmpeg:
-
         opts["ffmpeg_location"] = ffmpeg
 
-    # YOUTUBE COOKIES
     if os.path.exists("cookies.txt"):
-
         opts["cookiefile"] = "cookies.txt"
 
     return opts
 
 # =========================================================
-# SAFE ERROR
+# ERROR RESPONSE
 # =========================================================
 
 def failed(error):
-
     return JSONResponse({
-
         "status": "failed",
         "error": str(error)
     })
 
 # =========================================================
-# STREAM PICKER
+# STREAM PICKER (IMPROVED)
 # =========================================================
 
 def get_stream(data, audio=False):
 
-    # direct stream
-    if data.get("url"):
-
-        return data["url"]
-
     formats = data.get("formats", [])
-
     if not formats:
-
         return None
 
-    # reverse for better quality first
-    for f in reversed(formats):
+    def score(f):
+        return (
+            f.get("height") or 0,
+            f.get("tbr") or 0
+        )
 
+    candidates = []
+
+    for f in formats:
         if not f.get("url"):
             continue
 
-        # audio filter
         if audio:
-
             if f.get("acodec") == "none":
                 continue
+        else:
+            if f.get("vcodec") == "none":
+                continue
 
-        return f["url"]
+        candidates.append(f)
 
-    return None
+    if not candidates:
+        return None
+
+    best = sorted(candidates, key=score, reverse=True)[0]
+    return best["url"]
 
 # =========================================================
 # HOME
@@ -257,15 +193,10 @@ def get_stream(data, audio=False):
 
 @app.get("/")
 def home():
-
     return {
-
         "status": "running",
-
         "engine": "stable-youtube-engine",
-
         "features": [
-
             "youtube",
             "facebook",
             "instagram",
@@ -285,50 +216,26 @@ def home():
 
 @app.get("/info")
 def info(url: str):
-
     try:
-
         if not supported(url):
-
-            return failed(
-                "Unsupported URL"
-            )
+            return failed("Unsupported URL")
 
         url = clean_url(url)
 
-        with yt_dlp.YoutubeDL(
-            ydl_opts()
-        ) as ydl:
-
-            data = ydl.extract_info(
-                url,
-                download=False
-            )
+        with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
+            data = ydl.extract_info(url, download=False)
 
         return {
-
             "status": "success",
-
-            "title":
-                data.get("title"),
-
-            "thumbnail":
-                data.get("thumbnail"),
-
-            "duration":
-                data.get("duration"),
-
-            "uploader":
-                data.get("uploader"),
-
-            "view_count":
-                data.get("view_count")
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "duration": data.get("duration"),
+            "uploader": data.get("uploader"),
+            "view_count": data.get("view_count")
         }
 
     except Exception as e:
-
         traceback.print_exc()
-
         return failed(e)
 
 # =========================================================
@@ -337,55 +244,30 @@ def info(url: str):
 
 @app.get("/stream")
 def stream(url: str):
-
     try:
-
         if not supported(url):
-
-            return failed(
-                "Unsupported URL"
-            )
+            return failed("Unsupported URL")
 
         url = clean_url(url)
 
-        with yt_dlp.YoutubeDL(
-            ydl_opts()
-        ) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
+            data = ydl.extract_info(url, download=False)
 
-            data = ydl.extract_info(
-                url,
-                download=False
-            )
-
-        stream_url = get_stream(data)
+        stream_url = get_stream(data, audio=False)
 
         if not stream_url:
-
-            return failed(
-                "No stream found"
-            )
+            return failed("No stream found")
 
         return {
-
             "status": "success",
-
-            "title":
-                data.get("title"),
-
-            "thumbnail":
-                data.get("thumbnail"),
-
-            "duration":
-                data.get("duration"),
-
-            "stream_url":
-                stream_url
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "duration": data.get("duration"),
+            "stream_url": stream_url
         }
 
     except Exception as e:
-
         traceback.print_exc()
-
         return failed(e)
 
 # =========================================================
@@ -394,124 +276,61 @@ def stream(url: str):
 
 @app.get("/audio-stream")
 def audio_stream(url: str):
-
     try:
-
         if not supported(url):
-
-            return failed(
-                "Unsupported URL"
-            )
+            return failed("Unsupported URL")
 
         url = clean_url(url)
 
-        with yt_dlp.YoutubeDL(
-            ydl_opts(audio=True)
-        ) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts(audio=True)) as ydl:
+            data = ydl.extract_info(url, download=False)
 
-            data = ydl.extract_info(
-                url,
-                download=False
-            )
-
-        audio_url = get_stream(
-            data,
-            audio=True
-        )
+        audio_url = get_stream(data, audio=True)
 
         if not audio_url:
-
-            return failed(
-                "No audio found"
-            )
+            return failed("No audio found")
 
         return {
-
             "status": "success",
-
-            "title":
-                data.get("title"),
-
-            "thumbnail":
-                data.get("thumbnail"),
-
-            "audio_url":
-                audio_url
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "audio_url": audio_url
         }
 
     except Exception as e:
-
         traceback.print_exc()
-
         return failed(e)
 
 # =========================================================
-# VIDEO DOWNLOAD
+# DOWNLOAD VIDEO
 # =========================================================
 
 @app.get("/download")
 def download(url: str):
-
     try:
-
         if not supported(url):
-
-            return failed(
-                "Unsupported URL"
-            )
+            return failed("Unsupported URL")
 
         url = clean_url(url)
 
         uid = str(uuid.uuid4())
+        output = os.path.join(DOWNLOAD_DIR, f"{uid}.%(ext)s")
 
-        output = os.path.join(
-            DOWNLOAD_DIR,
-            f"{uid}.%(ext)s"
-        )
+        with yt_dlp.YoutubeDL(ydl_opts(output)) as ydl:
+            data = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(data)
 
-        with yt_dlp.YoutubeDL(
-            ydl_opts(output)
-        ) as ydl:
-
-            data = ydl.extract_info(
-                url,
-                download=True
+        if os.path.exists(filename):
+            return FileResponse(
+                path=filename,
+                media_type="video/mp4",
+                filename=os.path.basename(filename)
             )
 
-            filename = ydl.prepare_filename(
-                data
-            )
-
-        # merged correction
-        base = filename.rsplit(".", 1)[0]
-
-        mp4 = base + ".mp4"
-
-        if os.path.exists(mp4):
-
-            filename = mp4
-
-        if not os.path.exists(filename):
-
-            return failed(
-                "Downloaded file missing"
-            )
-
-        return FileResponse(
-
-            path=filename,
-
-            media_type="video/mp4",
-
-            filename=os.path.basename(
-                filename
-            )
-        )
+        return failed("Downloaded file missing")
 
     except Exception as e:
-
         traceback.print_exc()
-
         return failed(e)
 
 # =========================================================
@@ -520,79 +339,40 @@ def download(url: str):
 
 @app.get("/audio")
 def audio(url: str):
-
     try:
-
         if not supported(url):
-
-            return failed(
-                "Unsupported URL"
-            )
+            return failed("Unsupported URL")
 
         url = clean_url(url)
 
         uid = str(uuid.uuid4())
+        output = os.path.join(DOWNLOAD_DIR, f"{uid}.%(ext)s")
 
-        output = os.path.join(
-            DOWNLOAD_DIR,
-            f"{uid}.%(ext)s"
-        )
+        opts = ydl_opts(output, audio=True)
 
-        opts = ydl_opts(
-            output,
-            audio=True
-        )
-
-        # MP3 CONVERSION
         opts["postprocessors"] = [{
-
-            "key":
-                "FFmpegExtractAudio",
-
-            "preferredcodec":
-                "mp3",
-
-            "preferredquality":
-                "192",
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
         }]
 
         with yt_dlp.YoutubeDL(opts) as ydl:
+            data = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(data)
 
-            data = ydl.extract_info(
-                url,
-                download=True
-            )
-
-            filename = ydl.prepare_filename(
-                data
-            )
-
-        mp3 = (
-            filename.rsplit(".", 1)[0]
-            + ".mp3"
-        )
+        mp3 = filename.rsplit(".", 1)[0] + ".mp3"
 
         if not os.path.exists(mp3):
-
-            return failed(
-                "MP3 conversion failed"
-            )
+            return failed("MP3 conversion failed")
 
         return FileResponse(
-
             path=mp3,
-
             media_type="audio/mpeg",
-
-            filename=os.path.basename(
-                mp3
-            )
+            filename=os.path.basename(mp3)
         )
 
     except Exception as e:
-
         traceback.print_exc()
-
         return failed(e)
 
 # =========================================================
@@ -601,11 +381,7 @@ def audio(url: str):
 
 @app.get("/health")
 def health():
-
-    return {
-
-        "status": "healthy"
-    }
+    return {"status": "healthy"}
 
 # =========================================================
 # STARTUP
