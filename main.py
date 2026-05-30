@@ -4,7 +4,11 @@ from fastapi.responses import JSONResponse
 import yt_dlp
 import traceback
 
-app = FastAPI(title="Stable Media API")
+app = FastAPI(title="Verified Stable Media API")
+
+# =========================
+# CORS
+# =========================
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,12 +19,12 @@ app.add_middleware(
 )
 
 # =========================
-# SUPPORT CHECK
+# SUPPORTED URLS
 # =========================
 
 SUPPORTED = ["youtube.com", "youtu.be"]
 
-def supported(url: str):
+def is_supported(url: str):
     return any(x in url for x in SUPPORTED)
 
 # =========================
@@ -37,12 +41,12 @@ def clean_url(url: str):
     return url
 
 # =========================
-# SAFE YT-DLP OPTIONS
+# YT-DLP OPTIONS
 # =========================
 
-def ydl_opts():
+def ydl_opts(audio=False):
     return {
-        "format": "bv*+ba/best",
+        "format": "bestaudio/best" if audio else "bv*+ba/best",
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
@@ -61,7 +65,7 @@ def ydl_opts():
     }
 
 # =========================
-# SAFE RESPONSE
+# ERROR RESPONSE
 # =========================
 
 def fail(msg):
@@ -71,24 +75,25 @@ def fail(msg):
     })
 
 # =========================
-# EXTRACT SAFE
+# SAFE EXTRACT
 # =========================
 
-def extract(url: str):
+def extract(url: str, audio=False):
     try:
-        with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts(audio=audio)) as ydl:
             data = ydl.extract_info(url, download=False)
 
         return data if isinstance(data, dict) else None
 
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        traceback.print_exc()
+        return None
 
 # =========================
 # STREAM PICKER
 # =========================
 
-def get_stream(data):
+def pick_stream(data):
     if not isinstance(data, dict):
         return None
 
@@ -104,51 +109,64 @@ def get_stream(data):
     return None
 
 # =========================
-# INFO
+# STARTUP DEBUG (IMPORTANT)
+# =========================
+
+@app.on_event("startup")
+def startup_check():
+    print("\n==============================")
+    print(" ROUTES LOADED INTO FASTAPI")
+    print("==============================")
+    for r in app.routes:
+        print(r.path)
+    print("==============================\n")
+
+# =========================
+# INFO ENDPOINT
 # =========================
 
 @app.get("/info")
 def info(url: str):
 
     try:
-        if not supported(url):
+        if not is_supported(url):
             return fail("unsupported url")
 
         url = clean_url(url)
         data = extract(url)
 
-        if not data or "error" in data:
-            return fail("extract failed or blocked")
+        if not data:
+            return fail("yt-dlp failed or blocked")
 
         return {
             "status": "success",
             "title": data.get("title"),
             "duration": data.get("duration"),
-            "thumbnail": data.get("thumbnail")
+            "thumbnail": data.get("thumbnail"),
+            "uploader": data.get("uploader")
         }
 
     except Exception as e:
-        traceback.print_exc()
         return fail(e)
 
 # =========================
-# STREAM
+# STREAM ENDPOINT
 # =========================
 
 @app.get("/stream")
 def stream(url: str):
 
     try:
-        if not supported(url):
+        if not is_supported(url):
             return fail("unsupported url")
 
         url = clean_url(url)
         data = extract(url)
 
-        if not data or "error" in data:
-            return fail("extract failed or blocked by youtube")
+        if not data:
+            return fail("yt-dlp extraction failed")
 
-        stream_url = get_stream(data)
+        stream_url = pick_stream(data)
 
         if not stream_url:
             return fail("no stream found")
@@ -160,36 +178,26 @@ def stream(url: str):
         }
 
     except Exception as e:
-        traceback.print_exc()
         return fail(e)
 
 # =========================
-# AUDIO
+# AUDIO ENDPOINT
 # =========================
 
 @app.get("/audio")
 def audio(url: str):
 
     try:
-        if not supported(url):
+        if not is_supported(url):
             return fail("unsupported url")
 
         url = clean_url(url)
+        data = extract(url, audio=True)
 
-        # audio mode
-        opts = ydl_opts()
-        opts["format"] = "bestaudio/best"
+        if not data:
+            return fail("audio extraction failed")
 
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                data = ydl.extract_info(url, download=False)
-        except Exception as e:
-            return fail(str(e))
-
-        if not data or "error" in data:
-            return fail("audio extract failed")
-
-        audio_url = get_stream(data)
+        audio_url = pick_stream(data)
 
         if not audio_url:
             return fail("no audio found")
@@ -201,11 +209,10 @@ def audio(url: str):
         }
 
     except Exception as e:
-        traceback.print_exc()
         return fail(e)
 
 # =========================
-# HEALTH CHECK
+# HEALTH
 # =========================
 
 @app.get("/health")
