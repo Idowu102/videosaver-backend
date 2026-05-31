@@ -18,25 +18,41 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 # =========================================================
-# CONFIG
+# APP
 # =========================================================
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_ME")
-
-PROXIES = os.getenv("PROXY_LIST", "").split(",")
-
-CACHE_TTL = 60 * 30
-RATE_LIMIT = 60  # requests per minute per IP
-
-redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-
-app = FastAPI(title="Media CDN v2")
+app = FastAPI(title="Media CDN Production v1 (LOCKED)")
 
 executor = ThreadPoolExecutor(max_workers=12)
 
+# =========================================================
+# REDIS
+# =========================================================
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+
+CACHE_TTL = 60 * 30
+RATE_LIMIT = 60
+
+# =========================================================
+# SECURITY KEY
+# =========================================================
+
+SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_ME")
+
+# =========================================================
+# PROXY LIST (OPTIONAL)
+# =========================================================
+
+PROXIES = os.getenv("PROXY_LIST", "").split(",")
+
+# =========================================================
+# LOGGING
+# =========================================================
+
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("cdn-v2")
+logger = logging.getLogger("cdn")
 
 # =========================================================
 # RATE LIMIT
@@ -53,11 +69,10 @@ def rate_limit(ip: str):
         raise HTTPException(429, "rate limit exceeded")
 
 # =========================================================
-# SIGNING (JWT-STYLE LIGHTWEIGHT)
+# SIGNING
 # =========================================================
 
-def sign(payload: dict) -> str:
-    data = json.dumps(payload, separators=(",", ":"))
+def sign_payload(data: str) -> str:
     sig = hmac.new(
         SECRET_KEY.encode(),
         data.encode(),
@@ -67,19 +82,19 @@ def sign(payload: dict) -> str:
     return base64.urlsafe_b64encode(sig + data.encode()).decode()
 
 
-def verify(token: str):
+def verify_token(token: str):
     try:
         raw = base64.urlsafe_b64decode(token.encode())
         sig = raw[:32]
         data = raw[32:]
 
-        expected_sig = hmac.new(
+        expected = hmac.new(
             SECRET_KEY.encode(),
             data,
             hashlib.sha256
         ).digest()
 
-        if not hmac.compare_digest(sig, expected_sig):
+        if not hmac.compare_digest(sig, expected):
             return None
 
         return json.loads(data)
@@ -93,25 +108,18 @@ def verify(token: str):
 
 def valid(url: str):
     host = urlparse(url).netloc.lower()
+
     allowed = {
         "youtube.com", "www.youtube.com", "youtu.be",
         "facebook.com", "www.facebook.com",
         "tiktok.com", "www.tiktok.com",
         "instagram.com", "www.instagram.com"
     }
+
     return host in allowed
 
 # =========================================================
-# PROXY ROTATION (EXTRACTION ONLY)
-# =========================================================
-
-def get_proxy():
-    if not PROXIES or PROXIES == [""]:
-        return None
-    return random.choice(PROXIES)
-
-# =========================================================
-# REDIS CACHE
+# CACHE
 # =========================================================
 
 def cache_get(key):
@@ -123,12 +131,16 @@ def cache_set(key, value):
     redis_client.setex(key, CACHE_TTL, json.dumps(value))
 
 # =========================================================
-# YT-DLP OPTIONS (HARDENED)
+# YT-DLP OPTIONS
 # =========================================================
 
-def ydl_opts():
-    proxy = get_proxy()
+def get_proxy():
+    if not PROXIES or PROXIES == [""]:
+        return None
+    return random.choice(PROXIES)
 
+
+def ydl_opts():
     opts = {
         "quiet": True,
         "noplaylist": True,
@@ -146,6 +158,7 @@ def ydl_opts():
         }
     }
 
+    proxy = get_proxy()
     if proxy:
         opts["proxy"] = proxy
 
@@ -160,7 +173,7 @@ def extract_sync(url):
         with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
             return ydl.extract_info(url, download=False)
     except Exception as e:
-        logger.exception("extract failed")
+        logger.exception("yt-dlp error")
         return {"error": str(e)}
 
 
@@ -186,7 +199,7 @@ def best_stream(data):
     return max(streams, key=lambda x: x.get("height") or 0)
 
 # =========================================================
-# STREAM PROXY (REAL CDN STYLE)
+# STREAM GENERATOR (PROXY)
 # =========================================================
 
 def stream_generator(url):
@@ -197,10 +210,10 @@ def stream_generator(url):
                 yield chunk
 
 # =========================================================
-# INFO
+# API v1 INFO
 # =========================================================
 
-@app.get("/v2/info")
+@app.get("/api/v1/info")
 async def info(url: str, request: Request):
 
     rate_limit(request.client.host)
@@ -229,11 +242,11 @@ async def info(url: str, request: Request):
     return result
 
 # =========================================================
-# SIGN URL
+# SIGN URL (SECURE)
 # =========================================================
 
-@app.get("/v2/sign")
-def sign_url(url: str):
+@app.get("/api/v1/sign")
+def sign(url: str):
 
     if not valid(url):
         raise HTTPException(400, "invalid url")
@@ -243,22 +256,22 @@ def sign_url(url: str):
         "exp": int(time.time()) + 3600
     }
 
-    token = sign(payload)
+    token = sign_payload(json.dumps(payload))
 
     return {
-        "stream": f"/v2/stream?token={token}"
+        "stream": f"/api/v1/stream?token={token}"
     }
 
 # =========================================================
 # STREAM (NO DIRECT URL EXPOSURE)
 # =========================================================
 
-@app.get("/v2/stream")
+@app.get("/api/v1/stream")
 async def stream(token: str, request: Request):
 
     rate_limit(request.client.host)
 
-    payload = verify(token)
+    payload = verify_token(token)
 
     if not payload:
         raise HTTPException(403, "invalid token")
@@ -288,10 +301,59 @@ async def stream(token: str, request: Request):
             raise HTTPException(404, "no stream found")
 
         stream_url = best["url"]
-
         cache_set(cache_key, {"url": stream_url})
 
     return StreamingResponse(
         stream_generator(stream_url),
         media_type="video/mp4"
     )
+
+# =========================================================
+# AUDIO (OPTIONAL BASIC SUPPORT)
+# =========================================================
+
+@app.get("/api/v1/audio")
+async def audio(url: str, request: Request):
+
+    rate_limit(request.client.host)
+
+    if not valid(url):
+        raise HTTPException(400, "invalid url")
+
+    data = await extract(url)
+
+    if "error" in data:
+        raise HTTPException(502, data["error"])
+
+    formats = data.get("formats", [])
+
+    audio_streams = [
+        f for f in formats
+        if f.get("acodec") != "none"
+    ]
+
+    if not audio_streams:
+        raise HTTPException(404, "no audio found")
+
+    best = max(audio_streams, key=lambda x: x.get("abr") or 0)
+
+    return {
+        "title": data.get("title"),
+        "audio_url": best["url"]
+    }
+
+# =========================================================
+# LEGACY SUPPORT (PREVENT 404 FOREVER)
+# =========================================================
+
+@app.get("/stream")
+def legacy_stream():
+    raise HTTPException(410, "use /api/v1/stream")
+
+@app.get("/audio")
+def legacy_audio():
+    raise HTTPException(410, "use /api/v1/audio")
+
+@app.get("/info")
+def legacy_info():
+    raise HTTPException(410, "use /api/v1/info")
