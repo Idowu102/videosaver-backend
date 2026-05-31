@@ -2,5 +2,6 @@ fastapi
 uvicorn[standard]
 yt-dlp
 requests
-python-multipart
+redis
 aiofiles
+python-multipart
