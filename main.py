@@ -2,10 +2,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
 import asyncio
-import re
+import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 
-app = FastAPI(title="Media API with Validator Layer")
+# =========================
+# APP
+# =========================
+
+app = FastAPI(title="Production Media Gateway API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,28 +19,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-executor = ThreadPoolExecutor(max_workers=4)
+executor = ThreadPoolExecutor(max_workers=6)
 
-# =========================================================
-# VALIDATOR LAYER (CORE FIX)
-# =========================================================
+# =========================
+# OPTIONAL REDIS CACHE
+# =========================
+
+try:
+    import redis
+    r = redis.Redis(host="localhost", port=6379, decode_responses=True)
+    REDIS = True
+except:
+    REDIS = False
+    r = None
+
+
+def cache_get(key):
+    if REDIS:
+        return r.get(key)
+    return None
+
+
+def cache_set(key, value, ttl=3600):
+    if REDIS:
+        r.setex(key, ttl, value)
+
+
+def make_key(*args):
+    return hashlib.md5("|".join(args).encode()).hexdigest()
+
+
+# =========================
+# URL FIXER
+# =========================
+
+def fix_url(url: str):
+
+    url = url.strip()
+
+    # YouTube Shorts → Watch
+    if "youtube.com/shorts/" in url:
+        vid = url.split("/shorts/")[1].split("?")[0]
+        return f"https://www.youtube.com/watch?v={vid}"
+
+    # Block bad Facebook share links
+    if "facebook.com/share" in url:
+        return None
+
+    return url
+
 
 def validate_url(url: str):
 
     if not url:
-        return False, "empty url"
+        return False
 
-    url = url.strip()
-
-    # block Facebook share redirects (YOUR ERROR)
-    if "facebook.com/share" in url:
-        return False, "invalid facebook share link"
-
-    # block obvious invalid patterns
-    if "/share/r/" in url:
-        return False, "expired share link"
-
-    # require supported domains
     allowed = [
         "youtube.com",
         "youtu.be",
@@ -46,39 +84,21 @@ def validate_url(url: str):
         "x.com"
     ]
 
-    if not any(x in url for x in allowed):
-        return False, "unsupported platform"
+    return any(x in url for x in allowed)
 
-    return True, url
 
-# =========================================================
-# CLEAN URL
-# =========================================================
+# =========================
+# YT-DLP CONFIG
+# =========================
 
-def clean_url(url: str):
-
-    url = url.strip()
-
-    # YouTube shorts fix
-    if "youtube.com/shorts/" in url:
-        vid = url.split("/shorts/")[1].split("?")[0]
-        return f"https://www.youtube.com/watch?v={vid}"
-
-    return url
-
-# =========================================================
-# YT-DLP OPTIONS
-# =========================================================
-
-def ydl_opts(audio=False):
-
+def ydl_opts():
     return {
-        "format": "bestaudio/best" if audio else "bv*+ba/best",
         "quiet": True,
         "noplaylist": True,
         "retries": 2,
         "fragment_retries": 2,
         "socket_timeout": 20,
+        "cachedir": False,
         "http_headers": {
             "User-Agent": "Mozilla/5.0"
         },
@@ -89,133 +109,203 @@ def ydl_opts(audio=False):
         }
     }
 
-# =========================================================
-# SAFE EXECUTOR WRAPPER
-# =========================================================
 
-def _extract(url, audio=False):
+# =========================
+# ASYNC WRAPPER
+# =========================
+
+def _extract(url):
     try:
-        with yt_dlp.YoutubeDL(ydl_opts(audio=audio)) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
             return ydl.extract_info(url, download=False)
     except Exception as e:
         return {"error": str(e)}
 
-async def extract(url, audio=False):
+
+async def extract(url):
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, _extract, url, audio)
+    return await loop.run_in_executor(executor, _extract, url)
 
-# =========================================================
-# STREAM PICKER (SAFE)
-# =========================================================
 
-def pick_stream(data):
+# =========================
+# FORMAT ENGINE
+# =========================
+
+def parse_formats(data):
 
     if not isinstance(data, dict):
-        return None
-
-    if data.get("url"):
-        return data["url"]
+        return []
 
     formats = data.get("formats") or []
 
-    for f in reversed(formats):
-        if isinstance(f, dict) and f.get("url"):
-            return f["url"]
+    out = []
 
-    return None
+    for f in formats:
+        if not f.get("url"):
+            continue
 
-# =========================================================
+        out.append({
+            "id": f.get("format_id"),
+            "ext": f.get("ext"),
+            "height": f.get("height") or 0,
+            "url": f.get("url")
+        })
+
+    return sorted(out, key=lambda x: x["height"])
+
+
+def choose_quality(formats, quality):
+
+    if not formats:
+        return None
+
+    if quality == "best":
+        return formats[-1]
+
+    if quality == "low":
+        return formats[0]
+
+    try:
+        q = int(quality)
+        return min(formats, key=lambda x: abs(x["height"] - q))
+    except:
+        return formats[-1]
+
+
+# =========================
 # ROOT
-# =========================================================
+# =========================
 
 @app.get("/")
 def root():
-    return {"status": "online", "layer": "validator-enabled"}
+    return {
+        "status": "production_gateway_online",
+        "cache": REDIS
+    }
 
-# =========================================================
-# HEALTH
-# =========================================================
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-# =========================================================
+# =========================
 # INFO
-# =========================================================
+# =========================
 
 @app.get("/info")
 async def info(url: str):
 
-    ok, result = validate_url(url)
-    if not ok:
-        raise HTTPException(400, result)
+    url = fix_url(url)
 
-    url = clean_url(result)
+    if not url:
+        raise HTTPException(400, "Invalid Facebook share link")
+
+    if not validate_url(url):
+        raise HTTPException(400, "Unsupported platform")
+
+    key = make_key("info", url)
+    cached = cache_get(key)
+
+    if cached:
+        return json.loads(cached)
 
     data = await extract(url)
 
     if not isinstance(data, dict) or "error" in data:
-        raise HTTPException(422, "media unavailable")
+        raise HTTPException(422, "Media unavailable")
 
-    return {
+    result = {
         "title": data.get("title"),
         "duration": data.get("duration"),
         "thumbnail": data.get("thumbnail")
     }
 
-# =========================================================
+    cache_set(key, json.dumps(result))
+    return result
+
+
+# =========================
+# FORMATS
+# =========================
+
+@app.get("/formats")
+async def formats(url: str):
+
+    url = fix_url(url)
+
+    if not url:
+        raise HTTPException(400, "Invalid URL")
+
+    data = await extract(url)
+
+    if not isinstance(data, dict):
+        raise HTTPException(422, "Failed extraction")
+
+    return {
+        "title": data.get("title"),
+        "formats": parse_formats(data)
+    }
+
+
+# =========================
 # STREAM
-# =========================================================
+# =========================
 
 @app.get("/stream")
-async def stream(url: str):
+async def stream(url: str, quality: str = "best"):
 
-    ok, result = validate_url(url)
-    if not ok:
-        raise HTTPException(400, result)
+    url = fix_url(url)
 
-    url = clean_url(result)
+    if not url:
+        raise HTTPException(400, "Invalid Facebook share link")
+
+    key = make_key(url, quality)
+    cached = cache_get(key)
+
+    if cached:
+        return json.loads(cached)
 
     data = await extract(url)
 
     if not isinstance(data, dict) or "error" in data:
-        raise HTTPException(422, "media unavailable or blocked")
+        raise HTTPException(422, "Media unavailable")
 
-    stream_url = pick_stream(data)
+    formats = parse_formats(data)
+    selected = choose_quality(formats, quality)
 
-    if not stream_url:
-        raise HTTPException(404, "no stream found")
+    if not selected:
+        raise HTTPException(404, "No stream found")
 
-    return {
+    result = {
         "title": data.get("title"),
-        "stream_url": stream_url
+        "quality": selected["height"],
+        "stream_url": selected["url"]
     }
 
-# =========================================================
-# AUDIO STREAM
-# =========================================================
+    cache_set(key, json.dumps(result))
+    return result
 
-@app.get("/audio-stream")
-async def audio_stream(url: str):
 
-    ok, result = validate_url(url)
-    if not ok:
-        raise HTTPException(400, result)
+# =========================
+# AUDIO
+# =========================
 
-    url = clean_url(result)
+@app.get("/audio")
+async def audio(url: str):
 
-    data = await extract(url, audio=True)
+    url = fix_url(url)
 
-    if not isinstance(data, dict) or "error" in data:
-        raise HTTPException(422, "audio unavailable")
+    if not url:
+        raise HTTPException(400, "Invalid link")
 
-    audio_url = pick_stream(data)
+    data = await extract(url)
 
-    if not audio_url:
-        raise HTTPException(404, "no audio found")
+    if not isinstance(data, dict):
+        raise HTTPException(422, "Failed extraction")
 
-    return {
-        "title": data.get("title"),
-        "audio_url": audio_url
-    }
+    formats = parse_formats(data)
+
+    for f in formats:
+        if f["ext"] in ["m4a", "mp3", "webm"]:
+            return {
+                "title": data.get("title"),
+                "audio_url": f["url"]
+            }
+
+    raise HTTPException(404, "No audio found")
