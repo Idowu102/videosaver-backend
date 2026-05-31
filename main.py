@@ -1,11 +1,13 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
+import logging
+from urllib.parse import urlparse
 
-app = FastAPI(title="Media Gateway CDN v3")
+app = FastAPI(title="Media Gateway CDN v4")
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,24 +17,31 @@ app.add_middleware(
 )
 
 # =========================================================
-# THREAD WORKERS (NON-BLOCKING)
+# LOGGING
+# =========================================================
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("yt-gateway")
+
+# =========================================================
+# THREAD POOL
 # =========================================================
 
 executor = ThreadPoolExecutor(max_workers=8)
 
 # =========================================================
-# SIMPLE CACHE LAYER (Redis-ready replacement)
+# CACHE
 # =========================================================
 
 CACHE = {}
-CACHE_TTL = 60 * 20  # 20 min
+CACHE_TTL = 60 * 20
 
 def cache_get(key):
     item = CACHE.get(key)
     if not item:
         return None
     if time.time() > item["exp"]:
-        del CACHE[key]
+        CACHE.pop(key, None)
         return None
     return item["data"]
 
@@ -43,7 +52,7 @@ def cache_set(key, data):
     }
 
 # =========================================================
-# REQUEST DEDUPLICATION (ANTI-SPAM / STABILITY)
+# INFLIGHT DEDUP
 # =========================================================
 
 INFLIGHT = {}
@@ -65,45 +74,51 @@ def normalize_url(url: str):
     return url
 
 # =========================================================
-# VALIDATOR (SAFE MODE)
+# SAFE DOMAIN VALIDATION
 # =========================================================
 
 def valid(url: str):
-    allowed = [
-        "youtube.com",
+    host = urlparse(url).netloc.lower()
+
+    allowed = {
+        "youtube.com", "www.youtube.com",
         "youtu.be",
-        "facebook.com",
-        "tiktok.com",
-        "instagram.com",
-        "x.com",
-        "twitter.com"
-    ]
-    return any(x in url for x in allowed)
+        "facebook.com", "www.facebook.com",
+        "tiktok.com", "www.tiktok.com",
+        "instagram.com", "www.instagram.com",
+        "x.com", "twitter.com"
+    }
+
+    return host in allowed
 
 # =========================================================
-# YT-DLP OPTIONS (SAFE + STABLE)
+# YT-DLP OPTIONS
 # =========================================================
 
 def ydl_opts():
     return {
         "quiet": True,
         "noplaylist": True,
-        "retries": 2,
-        "fragment_retries": 2,
-        "socket_timeout": 20,
         "cachedir": False,
+        "retries": 3,
+        "fragment_retries": 3,
+        "socket_timeout": 20,
         "http_headers": {
-            "User-Agent": "Mozilla/5.0"
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0 Safari/537.36"
+            )
         },
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "ios", "web"]
+                "player_client": ["android", "ios", "tv", "web"]
             }
         }
     }
 
 # =========================================================
-# EXECUTOR WRAPPER
+# SYNC EXTRACTION
 # =========================================================
 
 def extract_sync(url):
@@ -111,30 +126,59 @@ def extract_sync(url):
         with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
             return ydl.extract_info(url, download=False)
     except Exception as e:
+        logger.exception("yt-dlp failed")
         return {"error": str(e)}
 
-async def extract(url):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, extract_sync, url)
-
 # =========================================================
-# STREAM BUILDER
+# ASYNC WRAPPER + DEDUP
 # =========================================================
 
-def get_best_format(data):
+async def extract(url, mode="default"):
+    key = inflight_key(url, mode)
+
+    if key in INFLIGHT:
+        return await INFLIGHT[key]
+
+    loop = asyncio.get_running_loop()
+    task = loop.run_in_executor(executor, extract_sync, url)
+
+    INFLIGHT[key] = task
+
+    try:
+        return await task
+    finally:
+        INFLIGHT.pop(key, None)
+
+# =========================================================
+# FORMAT SELECTORS
+# =========================================================
+
+def best_video(data):
     formats = data.get("formats") or []
 
-    cleaned = []
-    for f in formats:
-        if not f.get("url"):
-            continue
-        cleaned.append(f)
+    candidates = [
+        f for f in formats
+        if f.get("url") and f.get("vcodec") != "none"
+    ]
 
-    if not cleaned:
+    if not candidates:
         return None
 
-    cleaned.sort(key=lambda x: x.get("height") or 0)
-    return cleaned[-1]
+    return max(candidates, key=lambda x: x.get("height") or 0)
+
+
+def best_audio(data):
+    formats = data.get("formats") or []
+
+    candidates = [
+        f for f in formats
+        if f.get("url") and f.get("acodec") != "none"
+    ]
+
+    if not candidates:
+        return None
+
+    return max(candidates, key=lambda x: x.get("abr") or 0)
 
 # =========================================================
 # ROOT
@@ -143,17 +187,12 @@ def get_best_format(data):
 @app.get("/")
 def root():
     return {
-        "status": "CDN_v3_online",
-        "features": [
-            "cache layer",
-            "async worker engine",
-            "deduplication",
-            "fallback extraction"
-        ]
+        "status": "ok",
+        "service": "media-gateway-v4"
     }
 
 # =========================================================
-# INFO ENDPOINT (CACHED)
+# INFO
 # =========================================================
 
 @app.get("/info")
@@ -161,16 +200,17 @@ async def info(url: str):
 
     url = normalize_url(url)
     if not valid(url):
-        return {"status": "error", "message": "unsupported url"}
+        raise HTTPException(400, "unsupported url")
 
     cache_key = f"info:{url}"
     cached = cache_get(cache_key)
     if cached:
         return cached
 
-    data = await extract(url)
+    data = await extract(url, "info")
+
     if not data or "error" in data:
-        return {"status": "failed", "message": "extract failed"}
+        raise HTTPException(502, str(data.get("error", "extract failed")))
 
     result = {
         "title": data.get("title"),
@@ -183,7 +223,7 @@ async def info(url: str):
     return result
 
 # =========================================================
-# STREAM ENDPOINT (CACHED + SAFE)
+# STREAM
 # =========================================================
 
 @app.get("/stream")
@@ -191,25 +231,22 @@ async def stream(url: str):
 
     url = normalize_url(url)
     if not valid(url):
-        return {"status": "error", "message": "unsupported url"}
+        raise HTTPException(400, "unsupported url")
 
     cache_key = f"stream:{url}"
     cached = cache_get(cache_key)
     if cached:
         return cached
 
-    data = await extract(url)
+    data = await extract(url, "stream")
 
     if not data or "error" in data:
-        return {
-            "status": "failed",
-            "message": "media blocked or unavailable"
-        }
+        raise HTTPException(502, str(data.get("error", "extract failed")))
 
-    best = get_best_format(data)
+    best = best_video(data)
 
     if not best:
-        return {"status": "failed", "message": "no formats found"}
+        raise HTTPException(404, "no video stream found")
 
     result = {
         "status": "success",
@@ -222,7 +259,7 @@ async def stream(url: str):
     return result
 
 # =========================================================
-# AUDIO ENDPOINT
+# AUDIO
 # =========================================================
 
 @app.get("/audio")
@@ -230,29 +267,22 @@ async def audio(url: str):
 
     url = normalize_url(url)
     if not valid(url):
-        return {"status": "error", "message": "unsupported url"}
+        raise HTTPException(400, "unsupported url")
 
     cache_key = f"audio:{url}"
     cached = cache_get(cache_key)
     if cached:
         return cached
 
-    data = await extract(url)
+    data = await extract(url, "audio")
 
     if not data or "error" in data:
-        return {"status": "failed", "message": "audio unavailable"}
+        raise HTTPException(502, str(data.get("error", "extract failed")))
 
-    formats = data.get("formats") or []
+    best = best_audio(data)
 
-    audio_formats = [
-        f for f in formats
-        if f.get("acodec") != "none"
-    ]
-
-    if not audio_formats:
-        return {"status": "failed", "message": "no audio stream"}
-
-    best = audio_formats[-1]
+    if not best:
+        raise HTTPException(404, "no audio stream found")
 
     result = {
         "status": "success",
