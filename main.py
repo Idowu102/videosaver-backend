@@ -4,7 +4,7 @@ import yt_dlp
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-app = FastAPI(title="Smart Fallback Engine v2")
+app = FastAPI(title="Stable Media Engine")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,20 +23,17 @@ def fix_url(url: str):
 
     url = url.strip()
 
-    # YouTube shorts → watch
+    # YouTube Shorts → Watch
     if "youtube.com/shorts/" in url:
         vid = url.split("/shorts/")[1].split("?")[0]
         return f"https://www.youtube.com/watch?v={vid}"
 
-    # block bad facebook share links
+    # block invalid facebook share links
     if "facebook.com/share" in url:
         return None
 
     return url
 
-# =========================================================
-# VALIDATION
-# =========================================================
 
 def validate(url: str):
 
@@ -48,22 +45,24 @@ def validate(url: str):
         "youtu.be",
         "facebook.com",
         "tiktok.com",
-        "instagram.com"
+        "instagram.com",
+        "twitter.com",
+        "x.com"
     ]
 
     return any(x in url for x in allowed)
 
 # =========================================================
-# YT-DLP OPTIONS (MULTI-CLIENT FALLBACK)
+# YT-DLP CORE
 # =========================================================
 
-def ydl_opts(client="android"):
+def ydl_opts():
 
     return {
         "quiet": True,
         "noplaylist": True,
-        "retries": 1,
-        "fragment_retries": 1,
+        "retries": 2,
+        "fragment_retries": 2,
         "socket_timeout": 20,
         "cachedir": False,
         "http_headers": {
@@ -71,75 +70,100 @@ def ydl_opts(client="android"):
         },
         "extractor_args": {
             "youtube": {
-                "player_client": [client]
+                "player_client": ["android", "web", "ios"]
             }
         }
     }
 
-# =========================================================
-# ASYNC EXECUTOR
-# =========================================================
 
-def _extract(url, client):
+def _extract(url):
     try:
-        with yt_dlp.YoutubeDL(ydl_opts(client)) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
             return ydl.extract_info(url, download=False)
     except Exception as e:
         return {"error": str(e)}
 
-async def extract(url, client="android"):
+
+async def extract(url):
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, _extract, url, client)
+    return await loop.run_in_executor(executor, _extract, url)
 
 # =========================================================
-# FORMAT SCORING ENGINE
+# FORMAT PROCESSOR
 # =========================================================
 
-def score_formats(formats):
+def get_formats(data):
 
-    scored = []
+    if not isinstance(data, dict):
+        return []
+
+    formats = data.get("formats") or []
+
+    clean = []
 
     for f in formats:
         if not f.get("url"):
             continue
 
-        score = 0
-
-        h = f.get("height") or 0
-        if h:
-            score += h
-
-        if f.get("ext") == "mp4":
-            score += 50
-
-        scored.append({
+        clean.append({
             "url": f["url"],
-            "height": h,
+            "height": f.get("height") or 0,
             "ext": f.get("ext"),
-            "score": score
+            "vcodec": f.get("vcodec"),
+            "acodec": f.get("acodec")
         })
 
-    return sorted(scored, key=lambda x: x["score"])
+    return sorted(clean, key=lambda x: x["height"])
+
+
+def pick_best(formats, quality):
+
+    if not formats:
+        return None
+
+    if quality == "best":
+        return formats[-1]
+
+    if quality == "low":
+        return formats[0]
+
+    try:
+        q = int(quality)
+        return min(formats, key=lambda x: abs(x["height"] - q))
+    except:
+        return formats[-1]
 
 # =========================================================
-# SMART FALLBACK CHAIN
+# SMART EXTRACT (FALLBACK SAFE)
 # =========================================================
 
 async def smart_extract(url):
 
-    clients = ["android", "web", "ios"]
+    data = await extract(url)
 
-    for client in clients:
-
-        data = await extract(url, client)
-
-        if isinstance(data, dict) and "error" not in data:
-            return data
+    if isinstance(data, dict) and "error" not in data:
+        return data
 
     return None
 
 # =========================================================
-# STREAM ENGINE (NO MORE 404 LOGIC FAILURES)
+# ROOT
+# =========================================================
+
+@app.get("/")
+def root():
+    return {
+        "status": "stable_engine_online",
+        "features": [
+            "no crash mode",
+            "smart fallback",
+            "shorts support",
+            "safe audio handling"
+        ]
+    }
+
+# =========================================================
+# STREAM
 # =========================================================
 
 @app.get("/stream")
@@ -148,7 +172,7 @@ async def stream(url: str, quality: str = "best"):
     url = fix_url(url)
 
     if not url:
-        raise HTTPException(400, "Invalid Facebook share link")
+        raise HTTPException(400, "Unsupported Facebook share link")
 
     if not validate(url):
         raise HTTPException(400, "Unsupported platform")
@@ -156,47 +180,24 @@ async def stream(url: str, quality: str = "best"):
     data = await smart_extract(url)
 
     if not data:
-        raise HTTPException(422, "Unable to extract media")
+        raise HTTPException(422, "Extraction failed")
 
-    formats = data.get("formats") or []
+    formats = get_formats(data)
 
     if not formats:
-        raise HTTPException(404, "No formats available")
+        raise HTTPException(404, "No stream available")
 
-    scored = score_formats(formats)
-
-    # -------------------------
-    # SMART QUALITY SELECTION
-    # -------------------------
-
-    selected = None
-
-    if quality == "best":
-        selected = scored[-1]
-
-    elif quality == "low":
-        selected = scored[0]
-
-    else:
-        try:
-            q = int(quality)
-            selected = min(scored, key=lambda x: abs(x["height"] - q))
-        except:
-            selected = scored[-1]
-
-    # fallback safety
-    if not selected:
-        selected = scored[-1]
+    selected = pick_best(formats, quality)
 
     return {
         "title": data.get("title"),
         "quality": selected["height"],
         "stream_url": selected["url"],
-        "engine": "fallback_v2"
+        "engine": "stable_v1"
     }
 
 # =========================================================
-# AUDIO ENGINE (NO 404 EVER)
+# AUDIO (NO MORE 404 EVER)
 # =========================================================
 
 @app.get("/audio")
@@ -205,38 +206,45 @@ async def audio(url: str):
     url = fix_url(url)
 
     if not url:
-        raise HTTPException(400, "Invalid URL")
+        raise HTTPException(400, "Unsupported Facebook share link")
 
     data = await smart_extract(url)
 
     if not data:
         raise HTTPException(422, "Extraction failed")
 
-    formats = data.get("formats") or []
+    formats = get_formats(data)
 
     if not formats:
-        raise HTTPException(404, "No audio available")
+        raise HTTPException(404, "No media found")
 
-    # prioritize audio formats
-    audio = None
+    # 1. real audio-only
+    audio_formats = [
+        f for f in formats
+        if f["acodec"] != "none" and f["vcodec"] == "none"
+    ]
 
-    for f in formats:
-        if f.get("ext") in ["m4a", "webm", "mp3"]:
-            audio = f
-            break
+    # 2. fallback: any playable stream
+    fallback = formats
 
-    # fallback: ANY format (last resort)
-    if not audio:
-        audio = formats[-1]
+    chosen = None
+
+    if audio_formats:
+        chosen = audio_formats[-1]
+    elif fallback:
+        chosen = fallback[-1]
+
+    if not chosen:
+        raise HTTPException(404, "No audio stream available")
 
     return {
         "title": data.get("title"),
-        "audio_url": audio["url"],
-        "engine": "fallback_v2"
+        "audio_url": chosen["url"],
+        "engine": "stable_v1"
     }
 
 # =========================================================
-# INFO (SAFE)
+# INFO
 # =========================================================
 
 @app.get("/info")
@@ -256,21 +264,5 @@ async def info(url: str):
         "title": data.get("title"),
         "duration": data.get("duration"),
         "thumbnail": data.get("thumbnail"),
-        "engine": "fallback_v2"
-    }
-
-# =========================================================
-# ROOT
-# =========================================================
-
-@app.get("/")
-def root():
-    return {
-        "status": "smart_fallback_v2_active",
-        "features": [
-            "multi-client extraction",
-            "quality fallback",
-            "audio fallback safe mode",
-            "no 404 crashes"
-        ]
+        "engine": "stable_v1"
     }
