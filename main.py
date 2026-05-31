@@ -1,100 +1,311 @@
-import os
-import asyncio
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
-import requests
-
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+import asyncio
+import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse
 
-app = FastAPI(title="Stable Single Endpoint CDN")
+# =========================
+# APP
+# =========================
 
-executor = ThreadPoolExecutor(max_workers=10)
+app = FastAPI(title="Production Media Gateway API")
 
-# -------------------------
-# URL VALIDATION
-# -------------------------
-def valid(url: str):
-    host = urlparse(url).netloc.lower()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+executor = ThreadPoolExecutor(max_workers=6)
+
+# =========================
+# OPTIONAL REDIS CACHE
+# =========================
+
+try:
+    import redis
+    r = redis.Redis(host="localhost", port=6379, decode_responses=True)
+    REDIS = True
+except:
+    REDIS = False
+    r = None
+
+
+def cache_get(key):
+    if REDIS:
+        return r.get(key)
+    return None
+
+
+def cache_set(key, value, ttl=3600):
+    if REDIS:
+        r.setex(key, ttl, value)
+
+
+def make_key(*args):
+    return hashlib.md5("|".join(args).encode()).hexdigest()
+
+
+# =========================
+# URL FIXER
+# =========================
+
+def fix_url(url: str):
+
+    url = url.strip()
+
+    # YouTube Shorts → Watch
+    if "youtube.com/shorts/" in url:
+        vid = url.split("/shorts/")[1].split("?")[0]
+        return f"https://www.youtube.com/watch?v={vid}"
+
+    # Block bad Facebook share links
+    if "facebook.com/share" in url:
+        return None
+
+    return url
+
+
+def validate_url(url: str):
+
+    if not url:
+        return False
+
     allowed = [
-        "youtube.com", "www.youtube.com", "youtu.be",
-        "facebook.com", "www.facebook.com",
-        "tiktok.com", "www.tiktok.com",
-        "instagram.com", "www.instagram.com"
+        "youtube.com",
+        "youtu.be",
+        "facebook.com",
+        "tiktok.com",
+        "instagram.com",
+        "twitter.com",
+        "x.com"
     ]
-    return any(x in host for x in allowed)
 
-# -------------------------
-# YT-DLP OPTIONS
-# -------------------------
+    return any(x in url for x in allowed)
+
+
+# =========================
+# YT-DLP CONFIG
+# =========================
+
 def ydl_opts():
     return {
         "quiet": True,
         "noplaylist": True,
-        "retries": 3,
+        "retries": 2,
+        "fragment_retries": 2,
         "socket_timeout": 20,
         "cachedir": False,
         "http_headers": {
             "User-Agent": "Mozilla/5.0"
+        },
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"]
+            }
         }
     }
 
-# -------------------------
-# EXTRACTOR
-# -------------------------
-def extract_sync(url):
-    with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
-        return ydl.extract_info(url, download=False)
+
+# =========================
+# ASYNC WRAPPER
+# =========================
+
+def _extract(url):
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
+            return ydl.extract_info(url, download=False)
+    except Exception as e:
+        return {"error": str(e)}
+
 
 async def extract(url):
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, extract_sync, url)
+    return await loop.run_in_executor(executor, _extract, url)
 
-# -------------------------
-# BEST STREAM SELECTOR
-# -------------------------
-def best_stream(data):
-    formats = data.get("formats", [])
-    streams = [f for f in formats if f.get("url") and f.get("vcodec") != "none"]
 
-    if not streams:
+# =========================
+# FORMAT ENGINE
+# =========================
+
+def parse_formats(data):
+
+    if not isinstance(data, dict):
+        return []
+
+    formats = data.get("formats") or []
+
+    out = []
+
+    for f in formats:
+        if not f.get("url"):
+            continue
+
+        out.append({
+            "id": f.get("format_id"),
+            "ext": f.get("ext"),
+            "height": f.get("height") or 0,
+            "url": f.get("url")
+        })
+
+    return sorted(out, key=lambda x: x["height"])
+
+
+def choose_quality(formats, quality):
+
+    if not formats:
         return None
 
-    return max(streams, key=lambda x: x.get("height") or 0)
+    if quality == "best":
+        return formats[-1]
 
-# -------------------------
-# STREAM PROXY
-# -------------------------
-def stream_generator(url):
-    with requests.get(url, stream=True, timeout=20) as r:
-        r.raise_for_status()
-        for chunk in r.iter_content(chunk_size=1024 * 512):
-            if chunk:
-                yield chunk
+    if quality == "low":
+        return formats[0]
 
-# =========================================================
-# SINGLE ENDPOINT (ONLY ONE YOU USE)
-# =========================================================
-@app.get("/api/play")
-async def play(url: str, request: Request):
+    try:
+        q = int(quality)
+        return min(formats, key=lambda x: abs(x["height"] - q))
+    except:
+        return formats[-1]
 
-    if not valid(url):
-        raise HTTPException(400, "Unsupported URL")
+
+# =========================
+# ROOT
+# =========================
+
+@app.get("/")
+def root():
+    return {
+        "status": "production_gateway_online",
+        "cache": REDIS
+    }
+
+
+# =========================
+# INFO
+# =========================
+
+@app.get("/info")
+async def info(url: str):
+
+    url = fix_url(url)
+
+    if not url:
+        raise HTTPException(400, "Invalid Facebook share link")
+
+    if not validate_url(url):
+        raise HTTPException(400, "Unsupported platform")
+
+    key = make_key("info", url)
+    cached = cache_get(key)
+
+    if cached:
+        return json.loads(cached)
 
     data = await extract(url)
 
-    if "error" in data:
-        raise HTTPException(502, "Extraction failed")
+    if not isinstance(data, dict) or "error" in data:
+        raise HTTPException(422, "Media unavailable")
 
-    stream = best_stream(data)
+    result = {
+        "title": data.get("title"),
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail")
+    }
 
-    if not stream:
+    cache_set(key, json.dumps(result))
+    return result
+
+
+# =========================
+# FORMATS
+# =========================
+
+@app.get("/formats")
+async def formats(url: str):
+
+    url = fix_url(url)
+
+    if not url:
+        raise HTTPException(400, "Invalid URL")
+
+    data = await extract(url)
+
+    if not isinstance(data, dict):
+        raise HTTPException(422, "Failed extraction")
+
+    return {
+        "title": data.get("title"),
+        "formats": parse_formats(data)
+    }
+
+
+# =========================
+# STREAM
+# =========================
+
+@app.get("/stream")
+async def stream(url: str, quality: str = "best"):
+
+    url = fix_url(url)
+
+    if not url:
+        raise HTTPException(400, "Invalid Facebook share link")
+
+    key = make_key(url, quality)
+    cached = cache_get(key)
+
+    if cached:
+        return json.loads(cached)
+
+    data = await extract(url)
+
+    if not isinstance(data, dict) or "error" in data:
+        raise HTTPException(422, "Media unavailable")
+
+    formats = parse_formats(data)
+    selected = choose_quality(formats, quality)
+
+    if not selected:
         raise HTTPException(404, "No stream found")
 
-    stream_url = stream["url"]
+    result = {
+        "title": data.get("title"),
+        "quality": selected["height"],
+        "stream_url": selected["url"]
+    }
 
-    return StreamingResponse(
-        stream_generator(stream_url),
-        media_type="video/mp4"
-    )
+    cache_set(key, json.dumps(result))
+    return result
+
+
+# =========================
+# AUDIO
+# =========================
+
+@app.get("/audio")
+async def audio(url: str):
+
+    url = fix_url(url)
+
+    if not url:
+        raise HTTPException(400, "Invalid link")
+
+    data = await extract(url)
+
+    if not isinstance(data, dict):
+        raise HTTPException(422, "Failed extraction")
+
+    formats = parse_formats(data)
+
+    for f in formats:
+        if f["ext"] in ["m4a", "mp3", "webm"]:
+            return {
+                "title": data.get("title"),
+                "audio_url": f["url"]
+            }
+
+    raise HTTPException(404, "No audio found")
