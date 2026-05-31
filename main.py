@@ -1,311 +1,616 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 import yt_dlp
-import asyncio
-import hashlib
-import json
-from concurrent.futures import ThreadPoolExecutor
+import os
+import uuid
+import shutil
+import socket
+import traceback
 
-# =========================
+# =========================================================
+# SOCKET
+# =========================================================
+
+socket.setdefaulttimeout(120)
+
+# =========================================================
 # APP
-# =========================
+# =========================================================
 
-app = FastAPI(title="Production Media Gateway API")
+app = FastAPI(
+    title="Ultimate Downloader API",
+    version="2026.1"
+)
+
+# =========================================================
+# CORS
+# =========================================================
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-executor = ThreadPoolExecutor(max_workers=6)
+# =========================================================
+# STORAGE
+# =========================================================
 
-# =========================
-# OPTIONAL REDIS CACHE
-# =========================
+DOWNLOAD_DIR = "downloads"
 
-try:
-    import redis
-    r = redis.Redis(host="localhost", port=6379, decode_responses=True)
-    REDIS = True
-except:
-    REDIS = False
-    r = None
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# =========================================================
+# SUPPORTED DOMAINS
+# =========================================================
 
-def cache_get(key):
-    if REDIS:
-        return r.get(key)
-    return None
+SUPPORTED = [
 
+    "youtube.com",
+    "youtu.be",
 
-def cache_set(key, value, ttl=3600):
-    if REDIS:
-        r.setex(key, ttl, value)
+    "facebook.com",
+    "fb.watch",
 
+    "instagram.com",
 
-def make_key(*args):
-    return hashlib.md5("|".join(args).encode()).hexdigest()
+    "tiktok.com",
 
+    "twitter.com",
+    "x.com"
+]
 
-# =========================
-# URL FIXER
-# =========================
+# =========================================================
+# CHECK URL
+# =========================================================
 
-def fix_url(url: str):
+def supported(url: str):
+
+    return any(x in url for x in SUPPORTED)
+
+# =========================================================
+# CLEAN URL
+# =========================================================
+
+def clean_url(url: str):
 
     url = url.strip()
 
-    # YouTube Shorts → Watch
-    if "youtube.com/shorts/" in url:
-        vid = url.split("/shorts/")[1].split("?")[0]
-        return f"https://www.youtube.com/watch?v={vid}"
+    # mobile youtube
+    url = url.replace(
+        "m.youtube.com",
+        "www.youtube.com"
+    )
 
-    # Block bad Facebook share links
-    if "facebook.com/share" in url:
-        return None
+    # remove playlist
+    if "&list=" in url:
+
+        url = url.split("&list=")[0]
+
+    # remove pp
+    if "&pp=" in url:
+
+        url = url.split("&pp=")[0]
+
+    # shorts -> watch
+    if "youtube.com/shorts/" in url:
+
+        vid = (
+            url.split("/shorts/")[1]
+            .split("?")[0]
+        )
+
+        url = (
+            "https://www.youtube.com/watch?v="
+            f"{vid}"
+        )
 
     return url
 
+# =========================================================
+# yt-dlp OPTIONS
+# =========================================================
 
-def validate_url(url: str):
+def ydl_opts(outtmpl=None, audio=False):
 
-    if not url:
-        return False
+    # SAFE FORMAT FALLBACKS
+    if audio:
 
-    allowed = [
-        "youtube.com",
-        "youtu.be",
-        "facebook.com",
-        "tiktok.com",
-        "instagram.com",
-        "twitter.com",
-        "x.com"
-    ]
+        fmt = (
+            "bestaudio/best"
+        )
 
-    return any(x in url for x in allowed)
+    else:
 
+        fmt = (
+            "best[ext=mp4]/"
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
+            "bestvideo+bestaudio/"
+            "best"
+        )
 
-# =========================
-# YT-DLP CONFIG
-# =========================
+    opts = {
 
-def ydl_opts():
-    return {
+        "format": fmt,
+
         "quiet": True,
+
+        "no_warnings": True,
+
         "noplaylist": True,
-        "retries": 2,
-        "fragment_retries": 2,
-        "socket_timeout": 20,
-        "cachedir": False,
+
+        "nocheckcertificate": True,
+
+        "ignoreerrors": False,
+
+        "geo_bypass": True,
+
+        "retries": 10,
+
+        "fragment_retries": 10,
+
+        "socket_timeout": 120,
+
+        "extract_flat": False,
+
+        "merge_output_format": "mp4",
+
         "http_headers": {
-            "User-Agent": "Mozilla/5.0"
+
+            "User-Agent":
+                (
+                    "Mozilla/5.0 "
+                    "(Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36"
+                ),
+
+            "Accept-Language":
+                "en-US,en;q=0.9",
         },
+
+        # IMPORTANT FOR YOUTUBE
         "extractor_args": {
+
             "youtube": {
-                "player_client": ["android", "web"]
+
+                "player_client": [
+                    "android",
+                    "web",
+                    "ios"
+                ]
             }
         }
     }
 
+    # OUTPUT
+    if outtmpl:
 
-# =========================
-# ASYNC WRAPPER
-# =========================
+        opts["outtmpl"] = outtmpl
 
-def _extract(url):
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
-            return ydl.extract_info(url, download=False)
-    except Exception as e:
-        return {"error": str(e)}
+    # FFMPEG
+    ffmpeg = shutil.which("ffmpeg")
 
+    if ffmpeg:
 
-async def extract(url):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, _extract, url)
+        opts["ffmpeg_location"] = ffmpeg
 
+    # YOUTUBE COOKIES
+    if os.path.exists("cookies.txt"):
 
-# =========================
-# FORMAT ENGINE
-# =========================
+        opts["cookiefile"] = "cookies.txt"
 
-def parse_formats(data):
+    return opts
 
-    if not isinstance(data, dict):
-        return []
+# =========================================================
+# SAFE ERROR
+# =========================================================
 
-    formats = data.get("formats") or []
+def failed(error):
 
-    out = []
+    return JSONResponse({
 
-    for f in formats:
+        "status": "failed",
+        "error": str(error)
+    })
+
+# =========================================================
+# STREAM PICKER
+# =========================================================
+
+def get_stream(data, audio=False):
+
+    # direct stream
+    if data.get("url"):
+
+        return data["url"]
+
+    formats = data.get("formats", [])
+
+    if not formats:
+
+        return None
+
+    # reverse for better quality first
+    for f in reversed(formats):
+
         if not f.get("url"):
             continue
 
-        out.append({
-            "id": f.get("format_id"),
-            "ext": f.get("ext"),
-            "height": f.get("height") or 0,
-            "url": f.get("url")
-        })
+        # audio filter
+        if audio:
 
-    return sorted(out, key=lambda x: x["height"])
+            if f.get("acodec") == "none":
+                continue
 
+        return f["url"]
 
-def choose_quality(formats, quality):
+    return None
 
-    if not formats:
-        return None
-
-    if quality == "best":
-        return formats[-1]
-
-    if quality == "low":
-        return formats[0]
-
-    try:
-        q = int(quality)
-        return min(formats, key=lambda x: abs(x["height"] - q))
-    except:
-        return formats[-1]
-
-
-# =========================
-# ROOT
-# =========================
+# =========================================================
+# HOME
+# =========================================================
 
 @app.get("/")
-def root():
+def home():
+
     return {
-        "status": "production_gateway_online",
-        "cache": REDIS
+
+        "status": "running",
+
+        "engine": "stable-youtube-engine",
+
+        "features": [
+
+            "youtube",
+            "facebook",
+            "instagram",
+            "tiktok",
+            "twitter",
+            "shorts support",
+            "audio download",
+            "video download",
+            "stream extraction",
+            "cookies support"
+        ]
     }
 
-
-# =========================
+# =========================================================
 # INFO
-# =========================
+# =========================================================
 
 @app.get("/info")
-async def info(url: str):
+def info(url: str):
 
-    url = fix_url(url)
+    try:
 
-    if not url:
-        raise HTTPException(400, "Invalid Facebook share link")
+        if not supported(url):
 
-    if not validate_url(url):
-        raise HTTPException(400, "Unsupported platform")
+            return failed(
+                "Unsupported URL"
+            )
 
-    key = make_key("info", url)
-    cached = cache_get(key)
+        url = clean_url(url)
 
-    if cached:
-        return json.loads(cached)
+        with yt_dlp.YoutubeDL(
+            ydl_opts()
+        ) as ydl:
 
-    data = await extract(url)
+            data = ydl.extract_info(
+                url,
+                download=False
+            )
 
-    if not isinstance(data, dict) or "error" in data:
-        raise HTTPException(422, "Media unavailable")
+        return {
 
-    result = {
-        "title": data.get("title"),
-        "duration": data.get("duration"),
-        "thumbnail": data.get("thumbnail")
-    }
+            "status": "success",
 
-    cache_set(key, json.dumps(result))
-    return result
+            "title":
+                data.get("title"),
 
+            "thumbnail":
+                data.get("thumbnail"),
 
-# =========================
-# FORMATS
-# =========================
+            "duration":
+                data.get("duration"),
 
-@app.get("/formats")
-async def formats(url: str):
+            "uploader":
+                data.get("uploader"),
 
-    url = fix_url(url)
+            "view_count":
+                data.get("view_count")
+        }
 
-    if not url:
-        raise HTTPException(400, "Invalid URL")
+    except Exception as e:
 
-    data = await extract(url)
+        traceback.print_exc()
 
-    if not isinstance(data, dict):
-        raise HTTPException(422, "Failed extraction")
+        return failed(e)
 
-    return {
-        "title": data.get("title"),
-        "formats": parse_formats(data)
-    }
-
-
-# =========================
+# =========================================================
 # STREAM
-# =========================
+# =========================================================
 
 @app.get("/stream")
-async def stream(url: str, quality: str = "best"):
+def stream(url: str):
 
-    url = fix_url(url)
+    try:
 
-    if not url:
-        raise HTTPException(400, "Invalid Facebook share link")
+        if not supported(url):
 
-    key = make_key(url, quality)
-    cached = cache_get(key)
+            return failed(
+                "Unsupported URL"
+            )
 
-    if cached:
-        return json.loads(cached)
+        url = clean_url(url)
 
-    data = await extract(url)
+        with yt_dlp.YoutubeDL(
+            ydl_opts()
+        ) as ydl:
 
-    if not isinstance(data, dict) or "error" in data:
-        raise HTTPException(422, "Media unavailable")
+            data = ydl.extract_info(
+                url,
+                download=False
+            )
 
-    formats = parse_formats(data)
-    selected = choose_quality(formats, quality)
+        stream_url = get_stream(data)
 
-    if not selected:
-        raise HTTPException(404, "No stream found")
+        if not stream_url:
 
-    result = {
-        "title": data.get("title"),
-        "quality": selected["height"],
-        "stream_url": selected["url"]
-    }
+            return failed(
+                "No stream found"
+            )
 
-    cache_set(key, json.dumps(result))
-    return result
+        return {
 
+            "status": "success",
 
-# =========================
-# AUDIO
-# =========================
+            "title":
+                data.get("title"),
+
+            "thumbnail":
+                data.get("thumbnail"),
+
+            "duration":
+                data.get("duration"),
+
+            "stream_url":
+                stream_url
+        }
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return failed(e)
+
+# =========================================================
+# AUDIO STREAM
+# =========================================================
+
+@app.get("/audio-stream")
+def audio_stream(url: str):
+
+    try:
+
+        if not supported(url):
+
+            return failed(
+                "Unsupported URL"
+            )
+
+        url = clean_url(url)
+
+        with yt_dlp.YoutubeDL(
+            ydl_opts(audio=True)
+        ) as ydl:
+
+            data = ydl.extract_info(
+                url,
+                download=False
+            )
+
+        audio_url = get_stream(
+            data,
+            audio=True
+        )
+
+        if not audio_url:
+
+            return failed(
+                "No audio found"
+            )
+
+        return {
+
+            "status": "success",
+
+            "title":
+                data.get("title"),
+
+            "thumbnail":
+                data.get("thumbnail"),
+
+            "audio_url":
+                audio_url
+        }
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return failed(e)
+
+# =========================================================
+# VIDEO DOWNLOAD
+# =========================================================
+
+@app.get("/download")
+def download(url: str):
+
+    try:
+
+        if not supported(url):
+
+            return failed(
+                "Unsupported URL"
+            )
+
+        url = clean_url(url)
+
+        uid = str(uuid.uuid4())
+
+        output = os.path.join(
+            DOWNLOAD_DIR,
+            f"{uid}.%(ext)s"
+        )
+
+        with yt_dlp.YoutubeDL(
+            ydl_opts(output)
+        ) as ydl:
+
+            data = ydl.extract_info(
+                url,
+                download=True
+            )
+
+            filename = ydl.prepare_filename(
+                data
+            )
+
+        # merged correction
+        base = filename.rsplit(".", 1)[0]
+
+        mp4 = base + ".mp4"
+
+        if os.path.exists(mp4):
+
+            filename = mp4
+
+        if not os.path.exists(filename):
+
+            return failed(
+                "Downloaded file missing"
+            )
+
+        return FileResponse(
+
+            path=filename,
+
+            media_type="video/mp4",
+
+            filename=os.path.basename(
+                filename
+            )
+        )
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return failed(e)
+
+# =========================================================
+# AUDIO DOWNLOAD
+# =========================================================
 
 @app.get("/audio")
-async def audio(url: str):
+def audio(url: str):
 
-    url = fix_url(url)
+    try:
 
-    if not url:
-        raise HTTPException(400, "Invalid link")
+        if not supported(url):
 
-    data = await extract(url)
+            return failed(
+                "Unsupported URL"
+            )
 
-    if not isinstance(data, dict):
-        raise HTTPException(422, "Failed extraction")
+        url = clean_url(url)
 
-    formats = parse_formats(data)
+        uid = str(uuid.uuid4())
 
-    for f in formats:
-        if f["ext"] in ["m4a", "mp3", "webm"]:
-            return {
-                "title": data.get("title"),
-                "audio_url": f["url"]
-            }
+        output = os.path.join(
+            DOWNLOAD_DIR,
+            f"{uid}.%(ext)s"
+        )
 
-    raise HTTPException(404, "No audio found")
+        opts = ydl_opts(
+            output,
+            audio=True
+        )
+
+        # MP3 CONVERSION
+        opts["postprocessors"] = [{
+
+            "key":
+                "FFmpegExtractAudio",
+
+            "preferredcodec":
+                "mp3",
+
+            "preferredquality":
+                "192",
+        }]
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+
+            data = ydl.extract_info(
+                url,
+                download=True
+            )
+
+            filename = ydl.prepare_filename(
+                data
+            )
+
+        mp3 = (
+            filename.rsplit(".", 1)[0]
+            + ".mp3"
+        )
+
+        if not os.path.exists(mp3):
+
+            return failed(
+                "MP3 conversion failed"
+            )
+
+        return FileResponse(
+
+            path=mp3,
+
+            media_type="audio/mpeg",
+
+            filename=os.path.basename(
+                mp3
+            )
+        )
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return failed(e)
+
+# =========================================================
+# HEALTH
+# =========================================================
+
+@app.get("/health")
+def health():
+
+    return {
+
+        "status": "healthy"
+    }
+
+# =========================================================
+# STARTUP
+# =========================================================
+
+print("===================================")
+print("Ultimate Downloader API Started")
+print("===================================")
