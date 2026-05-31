@@ -1,14 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 import yt_dlp
+import os
+import uuid
+import shutil
+import socket
 import traceback
 
-app = FastAPI(title="Verified Stable Media API")
+socket.setdefaulttimeout(120)
 
-# =========================
-# CORS
-# =========================
+app = FastAPI(title="Ultimate Stable Downloader API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -18,13 +20,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+SUPPORTED = [
+    "youtube.com",
+    "youtu.be",
+    "facebook.com",
+    "fb.watch",
+    "instagram.com",
+    "tiktok.com",
+    "twitter.com",
+    "x.com"
+]
+
 # =========================
-# SUPPORTED URLS
+# SAFE CHECK
 # =========================
 
-SUPPORTED = ["youtube.com", "youtu.be"]
-
-def is_supported(url: str):
+def supported(url: str):
     return any(x in url for x in SUPPORTED)
 
 # =========================
@@ -41,18 +55,23 @@ def clean_url(url: str):
     return url
 
 # =========================
-# YT-DLP OPTIONS
+# OPTIONS
 # =========================
 
-def ydl_opts(audio=False):
-    return {
-        "format": "bestaudio/best" if audio else "bv*+ba/best",
-        "noplaylist": True,
+def ydl_opts(audio=False, outtmpl=None):
+
+    fmt = "bestaudio/best" if audio else (
+        "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best"
+    )
+
+    opts = {
+        "format": fmt,
         "quiet": True,
         "no_warnings": True,
+        "noplaylist": True,
         "retries": 3,
         "fragment_retries": 3,
-        "socket_timeout": 30,
+        "socket_timeout": 60,
         "ignoreerrors": False,
         "extractor_args": {
             "youtube": {
@@ -64,8 +83,20 @@ def ydl_opts(audio=False):
         }
     }
 
+    if outtmpl:
+        opts["outtmpl"] = outtmpl
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        opts["ffmpeg_location"] = ffmpeg
+
+    if os.path.exists("cookies.txt"):
+        opts["cookiefile"] = "cookies.txt"
+
+    return opts
+
 # =========================
-# ERROR RESPONSE
+# SAFE ERROR
 # =========================
 
 def fail(msg):
@@ -75,98 +106,104 @@ def fail(msg):
     })
 
 # =========================
-# SAFE EXTRACT
+# SAFE EXTRACT (CRASH PROOF)
 # =========================
 
-def extract(url: str, audio=False):
+def extract(url, audio=False):
     try:
         with yt_dlp.YoutubeDL(ydl_opts(audio=audio)) as ydl:
             data = ydl.extract_info(url, download=False)
 
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return None
 
-    except Exception:
-        traceback.print_exc()
-        return None
+        return data
+
+    except Exception as e:
+        return {"error": str(e)}
 
 # =========================
-# STREAM PICKER
+# STREAM PICKER (FIXED)
 # =========================
 
-def pick_stream(data):
+def get_stream(data, audio=False):
+
     if not isinstance(data, dict):
         return None
 
-    formats = data.get("formats")
+    if data.get("url"):
+        return data["url"]
 
-    if not formats:
-        return data.get("url")
+    formats = data.get("formats") or []
 
     for f in reversed(formats):
-        if isinstance(f, dict) and f.get("url"):
+        try:
+            if not f.get("url"):
+                continue
+
+            if audio and f.get("acodec") == "none":
+                continue
+
             return f["url"]
+
+        except:
+            continue
 
     return None
 
 # =========================
-# STARTUP DEBUG (IMPORTANT)
+# HOME
 # =========================
 
-@app.on_event("startup")
-def startup_check():
-    print("\n==============================")
-    print(" ROUTES LOADED INTO FASTAPI")
-    print("==============================")
-    for r in app.routes:
-        print(r.path)
-    print("==============================\n")
+@app.get("/")
+def home():
+    return {
+        "status": "running",
+        "engine": "stable-youtube-engine"
+    }
 
 # =========================
-# INFO ENDPOINT
+# INFO
 # =========================
 
 @app.get("/info")
 def info(url: str):
-
     try:
-        if not is_supported(url):
+        if not supported(url):
             return fail("unsupported url")
 
-        url = clean_url(url)
-        data = extract(url)
+        data = extract(clean_url(url))
 
-        if not data:
-            return fail("yt-dlp failed or blocked")
+        if not data or "error" in data:
+            return fail(data)
 
         return {
             "status": "success",
             "title": data.get("title"),
-            "duration": data.get("duration"),
             "thumbnail": data.get("thumbnail"),
-            "uploader": data.get("uploader")
+            "duration": data.get("duration"),
         }
 
     except Exception as e:
+        traceback.print_exc()
         return fail(e)
 
 # =========================
-# STREAM ENDPOINT
+# STREAM
 # =========================
 
 @app.get("/stream")
 def stream(url: str):
-
     try:
-        if not is_supported(url):
+        if not supported(url):
             return fail("unsupported url")
 
-        url = clean_url(url)
-        data = extract(url)
+        data = extract(clean_url(url))
 
-        if not data:
-            return fail("yt-dlp extraction failed")
+        if not data or "error" in data:
+            return fail("youtube blocked or failed extraction")
 
-        stream_url = pick_stream(data)
+        stream_url = get_stream(data)
 
         if not stream_url:
             return fail("no stream found")
@@ -178,26 +215,25 @@ def stream(url: str):
         }
 
     except Exception as e:
+        traceback.print_exc()
         return fail(e)
 
 # =========================
-# AUDIO ENDPOINT
+# AUDIO STREAM
 # =========================
 
-@app.get("/audio")
-def audio(url: str):
-
+@app.get("/audio-stream")
+def audio_stream(url: str):
     try:
-        if not is_supported(url):
+        if not supported(url):
             return fail("unsupported url")
 
-        url = clean_url(url)
-        data = extract(url, audio=True)
+        data = extract(clean_url(url), audio=True)
 
-        if not data:
+        if not data or "error" in data:
             return fail("audio extraction failed")
 
-        audio_url = pick_stream(data)
+        audio_url = get_stream(data, audio=True)
 
         if not audio_url:
             return fail("no audio found")
@@ -209,6 +245,69 @@ def audio(url: str):
         }
 
     except Exception as e:
+        traceback.print_exc()
+        return fail(e)
+
+# =========================
+# DOWNLOAD VIDEO
+# =========================
+
+@app.get("/download")
+def download(url: str):
+    try:
+        if not supported(url):
+            return fail("unsupported url")
+
+        uid = str(uuid.uuid4())
+        out = os.path.join(DOWNLOAD_DIR, f"{uid}.%(ext)s")
+
+        with yt_dlp.YoutubeDL(ydl_opts(outtmpl=out)) as ydl:
+            data = ydl.extract_info(clean_url(url), download=True)
+            filename = ydl.prepare_filename(data)
+
+        if not os.path.exists(filename):
+            return fail("file missing")
+
+        return FileResponse(filename, media_type="video/mp4")
+
+    except Exception as e:
+        traceback.print_exc()
+        return fail(e)
+
+# =========================
+# DOWNLOAD AUDIO
+# =========================
+
+@app.get("/audio")
+def audio(url: str):
+    try:
+        if not supported(url):
+            return fail("unsupported url")
+
+        uid = str(uuid.uuid4())
+        out = os.path.join(DOWNLOAD_DIR, f"{uid}.%(ext)s")
+
+        opts = ydl_opts(outtmpl=out, audio=True)
+
+        opts["postprocessors"] = [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }]
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            data = ydl.extract_info(clean_url(url), download=True)
+            filename = ydl.prepare_filename(data)
+
+        mp3 = filename.rsplit(".", 1)[0] + ".mp3"
+
+        if not os.path.exists(mp3):
+            return fail("mp3 conversion failed")
+
+        return FileResponse(mp3, media_type="audio/mpeg")
+
+    except Exception as e:
+        traceback.print_exc()
         return fail(e)
 
 # =========================
