@@ -47,20 +47,49 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # SUPPORTED DOMAINS
 # =========================================================
 
-SUPPORTED = [
-
-    "youtube.com",
-    "youtu.be",
-
+    SUPPORTED = [
+    # Facebook
     "facebook.com",
     "fb.watch",
 
+    # Instagram
     "instagram.com",
 
+    # TikTok
     "tiktok.com",
 
+    # X (Twitter)
     "twitter.com",
-    "x.com"
+    "x.com",
+
+    # Reddit
+    "reddit.com",
+
+    # Pinterest
+    "pinterest.com",
+
+    # LinkedIn
+    "linkedin.com",
+
+    # Snapchat
+    "snapchat.com",
+
+    # Threads
+    "threads.net",
+
+    # Tumblr
+    "tumblr.com",
+
+    # Vimeo
+    "vimeo.com",
+
+    # Dailymotion
+    "dailymotion.com",
+
+    # WhatsApp
+    "whatsapp.com",
+    "chat.whatsapp.com"
+
 ]
 
 # =========================================================
