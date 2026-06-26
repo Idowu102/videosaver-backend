@@ -47,7 +47,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # SUPPORTED DOMAINS
 # =========================================================
 
-    SUPPORTED = [
+SUPPORTED =[
     # Facebook
     "facebook.com",
     "fb.watch",
@@ -101,43 +101,25 @@ def supported(url: str):
     return any(x in url for x in SUPPORTED)
 
 # =========================================================
+# CHECK URL
+# =========================================================
+
+def supported(url: str):
+    return any(x in url for x in SUPPORTED)
+
+# =========================================================
 # CLEAN URL
 # =========================================================
 
 def clean_url(url: str):
+    return url.strip()
 
-    url = url.strip()
+# =========================================================
+# yt-dlp OPTIONS
+# =========================================================
 
-    # mobile youtube
-    url = url.replace(
-        "m.youtube.com",
-        "www.youtube.com"
-    )
-
-    # remove playlist
-    if "&list=" in url:
-
-        url = url.split("&list=")[0]
-
-    # remove pp
-    if "&pp=" in url:
-
-        url = url.split("&pp=")[0]
-
-    # shorts -> watch
-    if "youtube.com/shorts/" in url:
-
-        vid = (
-            url.split("/shorts/")[1]
-            .split("?")[0]
-        )
-
-        url = (
-            "https://www.youtube.com/watch?v="
-            f"{vid}"
-        )
-
-    return url
+def ydl_opts(outtmpl=None, audio=False):
+    ...
 
 # =========================================================
 # yt-dlp OPTIONS
