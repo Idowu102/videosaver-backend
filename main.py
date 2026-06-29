@@ -333,6 +333,7 @@ def info(url: str):
 # =========================================================
 
 @app.get("/stream")
+def stream(url: str):
 
     try:
         if not supported(url):
@@ -348,27 +349,30 @@ def info(url: str):
 
         for f in data.get("formats", []):
 
+            # Skip formats without URL
             if not f.get("url"):
                 continue
 
+            # Skip audio-only
             if f.get("vcodec") == "none":
                 continue
 
             height = f.get("height")
-
             if not height:
                 continue
 
             label = f"{height}p"
 
+            # Keep only one URL per quality
             if label not in urls:
                 urls[label] = f["url"]
                 qualities.append(label)
 
-        if not qualities:
-            return failed("No video qualities found")
-
-        qualities.sort(key=lambda q: int(q.replace("p", "")), reverse=True)
+        # Sort qualities (1080p,720p,480p...)
+        qualities.sort(
+            key=lambda x: int(x.replace("p", "")),
+            reverse=True
+        )
 
         return {
             "status": "success",
@@ -382,69 +386,6 @@ def info(url: str):
     except Exception as e:
         traceback.print_exc()
         return failed(str(e))
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return failed(e)
-
-# =========================================================
-# AUDIO STREAM
-# =========================================================
-
-@app.get("/audio-stream")
-def audio_stream(url: str):
-
-    try:
-
-        if not supported(url):
-
-            return failed(
-                "Unsupported URL"
-            )
-
-        url = clean_url(url)
-
-        with yt_dlp.YoutubeDL(
-            ydl_opts(audio=True)
-        ) as ydl:
-
-            data = ydl.extract_info(
-                url,
-                download=False
-            )
-
-        audio_url = get_stream(
-            data,
-            audio=True
-        )
-
-        if not audio_url:
-
-            return failed(
-                "No audio found"
-            )
-
-        return {
-
-            "status": "success",
-
-            "title":
-                data.get("title"),
-
-            "thumbnail":
-                data.get("thumbnail"),
-
-            "audio_url":
-                audio_url
-        }
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return failed(e)
 
 # =========================================================
 # VIDEO DOWNLOAD
