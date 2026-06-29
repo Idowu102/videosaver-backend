@@ -333,51 +333,55 @@ def info(url: str):
 # =========================================================
 
 @app.get("/stream")
-def stream(url: str):
 
     try:
-
         if not supported(url):
-
-            return failed(
-                "Unsupported URL"
-            )
+            return failed("Unsupported URL")
 
         url = clean_url(url)
 
-        with yt_dlp.YoutubeDL(
-            ydl_opts()
-        ) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
+            data = ydl.extract_info(url, download=False)
 
-            data = ydl.extract_info(
-                url,
-                download=False
-            )
+        qualities = []
+        urls = {}
 
-        stream_url = get_stream(data)
+        for f in data.get("formats", []):
 
-        if not stream_url:
+            if not f.get("url"):
+                continue
 
-            return failed(
-                "No stream found"
-            )
+            if f.get("vcodec") == "none":
+                continue
+
+            height = f.get("height")
+
+            if not height:
+                continue
+
+            label = f"{height}p"
+
+            if label not in urls:
+                urls[label] = f["url"]
+                qualities.append(label)
+
+        if not qualities:
+            return failed("No video qualities found")
+
+        qualities.sort(key=lambda q: int(q.replace("p", "")), reverse=True)
 
         return {
-
             "status": "success",
-
-            "title":
-                data.get("title"),
-
-            "thumbnail":
-                data.get("thumbnail"),
-
-            "duration":
-                data.get("duration"),
-
-            "stream_url":
-                stream_url
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "duration": data.get("duration"),
+            "qualities": qualities,
+            "urls": urls
         }
+
+    except Exception as e:
+        traceback.print_exc()
+        return failed(str(e))
 
     except Exception as e:
 
