@@ -115,7 +115,7 @@ def clean_url(url: str):
 # yt-dlp OPTIONS
 # =========================================================
 
-def ydl_opts(outtmpl=None, audio=False):
+def ydl_opts(outtmpl=None, audio=False, quality="best"):
 
     # SAFE FORMAT FALLBACKS
     if audio:
@@ -126,12 +126,14 @@ def ydl_opts(outtmpl=None, audio=False):
 
     else:
 
-        fmt = (
-            "best[ext=mp4]/"
-            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
-            "bestvideo+bestaudio/"
-            "best"
-        )
+        if quality == "best":
+    fmt = "bestvideo+bestaudio/best"
+else:
+    height = quality.replace("p","")
+    fmt = (
+        f"bestvideo[height<={height}]"
+        f"+bestaudio/best[height<={height}]"
+    )
 
     opts = {
 
@@ -332,6 +334,10 @@ def info(url: str):
 # STREAM
 # =========================================================
 
+from urllib.parse import quote
+
+BASE_URL = "https://videosaver-backend-production.up.railway.app"
+
 @app.get("/stream")
 def stream(url: str):
 
@@ -340,50 +346,45 @@ def stream(url: str):
         if not supported(url):
             return failed("Unsupported URL")
 
+        url = clean_url(url)
+
         with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
             data = ydl.extract_info(url, download=False)
 
         qualities = []
         urls = {}
 
-        formats = data.get("formats") or []
-
-        for f in formats:
-
-            if not f.get("url"):
-                continue
+        for f in data.get("formats", []):
 
             if f.get("vcodec") == "none":
                 continue
 
-            height = f.get("height")
+            if not f.get("height"):
+                continue
 
-            if height:
-                quality = f"{height}p"
-            else:
-                quality = (
-                    f.get("format_note")
-                    or f.get("format_id")
-                    or "default"
-                )
+            quality = f"{f['height']}p"
 
             if quality not in urls:
-                urls[quality] = f["url"]
+
+                urls[quality] = (
+                    f"{BASE_URL}/download"
+                    f"?url={quote(url)}"
+                    f"&quality={quote(quality)}"
+                )
+
                 qualities.append(quality)
 
-        # fallback
-        if not qualities and data.get("url"):
-
-            qualities.append("Best")
-            urls["Best"] = data["url"]
+        qualities.sort(
+            key=lambda x: int(x.replace("p","")),
+            reverse=True
+        )
 
         return {
-            "status": "success",
-            "title": data.get("title"),
-            "thumbnail": data.get("thumbnail"),
-            "duration": data.get("duration"),
-            "qualities": qualities,
-            "urls": urls
+            "status":"success",
+            "title":data.get("title"),
+            "thumbnail":data.get("thumbnail"),
+            "qualities":qualities,
+            "urls":urls
         }
 
     except Exception as e:
@@ -394,7 +395,7 @@ def stream(url: str):
 # =========================================================
 
 @app.get("/download")
-def download(url: str):
+def download(url: str, quality: str = "best"):
 
     try:
 
@@ -414,8 +415,8 @@ def download(url: str):
         )
 
         with yt_dlp.YoutubeDL(
-            ydl_opts(output)
-        ) as ydl:
+    ydl_opts(output, quality=quality)
+) as ydl:
 
             data = ydl.extract_info(
                 url,
