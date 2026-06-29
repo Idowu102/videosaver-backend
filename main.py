@@ -47,8 +47,9 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # SUPPORTED DOMAINS
 # =========================================================
 
-SUPPORTED =[
-    # Facebook
+SUPPORTED = [
+    
+     # Facebook
     "facebook.com",
     "fb.watch",
 
@@ -58,7 +59,7 @@ SUPPORTED =[
     # TikTok
     "tiktok.com",
 
-    # X (Twitter)
+    # Twitter / X
     "twitter.com",
     "x.com",
 
@@ -89,7 +90,6 @@ SUPPORTED =[
     # WhatsApp
     "whatsapp.com",
     "chat.whatsapp.com"
-
 ]
 
 # =========================================================
@@ -97,15 +97,24 @@ SUPPORTED =[
 # =========================================================
 
 def supported(url: str):
+    if not url:
+        return False
 
-    return any(x in url for x in SUPPORTED)
+    url = url.lower().strip()
+
+    return any(domain in url for domain in SUPPORTED)
 
 # =========================================================
 # CHECK URL
 # =========================================================
 
 def supported(url: str):
-    return any(x in url for x in SUPPORTED)
+    if not url:
+        return False
+
+    url = url.lower().strip()
+
+    return any(domain in url for domain in SUPPORTED)
 
 # =========================================================
 # CLEAN URL
@@ -268,25 +277,20 @@ def get_stream(data, audio=False):
 
 @app.get("/")
 def home():
-
     return {
-
         "status": "running",
-
-        "engine": "stable-youtube-engine",
-
+        "engine": "stable-downloader-engine",
         "features": [
-
-            "youtube",
             "facebook",
             "instagram",
             "tiktok",
             "twitter",
-            "shorts support",
-            "audio download",
+            "x",
+            "reddit",
+            "vimeo",
             "video download",
-            "stream extraction",
-            "cookies support"
+            "audio download",
+            "stream extraction"
         ]
     }
 
@@ -296,26 +300,27 @@ def home():
 
 @app.get("/info")
 def info(url: str):
-
     try:
-
         if not supported(url):
-
-            return failed(
-                "Unsupported URL"
-            )
+            return failed("Unsupported URL")
 
         url = clean_url(url)
 
-        with yt_dlp.YoutubeDL(
-            ydl_opts()
-        ) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
+            data = ydl.extract_info(url, download=False)
 
-            data = ydl.extract_info(
-                url,
-                download=False
-            )
+        return {
+            "status": "success",
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "duration": data.get("duration"),
+            "uploader": data.get("uploader"),
+            "view_count": data.get("view_count")
+        }
 
+    except Exception as e:
+        traceback.print_exc()
+        return failed(str(e))
         return {
 
             "status": "success",
