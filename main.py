@@ -336,10 +336,9 @@ def info(url: str):
 def stream(url: str):
 
     try:
+
         if not supported(url):
             return failed("Unsupported URL")
-
-        url = clean_url(url)
 
         with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
             data = ydl.extract_info(url, download=False)
@@ -347,32 +346,36 @@ def stream(url: str):
         qualities = []
         urls = {}
 
-        for f in data.get("formats", []):
+        formats = data.get("formats") or []
 
-            # Skip formats without URL
+        for f in formats:
+
             if not f.get("url"):
                 continue
 
-            # Skip audio-only
             if f.get("vcodec") == "none":
                 continue
 
             height = f.get("height")
-            if not height:
-                continue
 
-            label = f"{height}p"
+            if height:
+                quality = f"{height}p"
+            else:
+                quality = (
+                    f.get("format_note")
+                    or f.get("format_id")
+                    or "default"
+                )
 
-            # Keep only one URL per quality
-            if label not in urls:
-                urls[label] = f["url"]
-                qualities.append(label)
+            if quality not in urls:
+                urls[quality] = f["url"]
+                qualities.append(quality)
 
-        # Sort qualities (1080p,720p,480p...)
-        qualities.sort(
-            key=lambda x: int(x.replace("p", "")),
-            reverse=True
-        )
+        # fallback
+        if not qualities and data.get("url"):
+
+            qualities.append("Best")
+            urls["Best"] = data["url"]
 
         return {
             "status": "success",
@@ -386,7 +389,6 @@ def stream(url: str):
     except Exception as e:
         traceback.print_exc()
         return failed(str(e))
-
 # =========================================================
 # VIDEO DOWNLOAD
 # =========================================================
