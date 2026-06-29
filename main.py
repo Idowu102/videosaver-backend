@@ -115,7 +115,7 @@ def clean_url(url: str):
 # yt-dlp OPTIONS
 # =========================================================
 
-ddef ydl_opts(outtmpl=None, audio=False, quality="best"):
+def ydl_opts(outtmpl=None, audio=False, quality="best"):
 
     if audio:
         fmt = "bestaudio/best"
@@ -130,21 +130,39 @@ ddef ydl_opts(outtmpl=None, audio=False, quality="best"):
                 f"bestaudio/best[height<={height}]"
             )
 
-    opts = {
-        "format": fmt,
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "nocheckcertificate": True,
-        "ignoreerrors": False,
-        "geo_bypass": True,
-        "retries": 10,
-        "fragment_retries": 10,
-        "socket_timeout": 120,
-        "extract_flat": False,
-        "merge_output_format": "mp4",
-        ...
+   opts = {
+    "format": fmt,
+    "quiet": True,
+    "no_warnings": True,
+    "noplaylist": True,
+    "nocheckcertificate": True,
+    "ignoreerrors": False,
+    "geo_bypass": True,
+    "retries": 10,
+    "fragment_retries": 10,
+    "socket_timeout": 120,
+    "extract_flat": False,
+    "merge_output_format": "mp4",
+    "http_headers": {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    },
+    "extractor_args": {
+        "youtube": {
+            "player_client": [
+                "android",
+                "web",
+                "ios"
+            ]
+        }
     }
+}
 
         # IMPORTANT FOR YOUTUBE
         "extractor_args": {
