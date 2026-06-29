@@ -105,30 +105,11 @@ def supported(url: str):
     return any(domain in url for domain in SUPPORTED)
 
 # =========================================================
-# CHECK URL
-# =========================================================
-
-def supported(url: str):
-    if not url:
-        return False
-
-    url = url.lower().strip()
-
-    return any(domain in url for domain in SUPPORTED)
-
-# =========================================================
 # CLEAN URL
 # =========================================================
 
 def clean_url(url: str):
     return url.strip()
-
-# =========================================================
-# yt-dlp OPTIONS
-# =========================================================
-
-def ydl_opts(outtmpl=None, audio=False):
-    ...
 
 # =========================================================
 # yt-dlp OPTIONS
