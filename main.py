@@ -22,7 +22,11 @@ app = FastAPI(
     title="Ultimate Downloader API",
     version="2026.1"
 )
-
+@app.get("/version")
+def version():
+    return {
+        "yt_dlp": yt_dlp.version.__version__
+    }
 # =========================================================
 # CORS
 # =========================================================
