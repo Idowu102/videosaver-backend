@@ -121,15 +121,15 @@ def ydl_opts(outtmpl=None, audio=False, quality="best"):
         fmt = "bestaudio/best"
     else:
         if quality == "best":
-    fmt = "bestvideo+bestaudio/best"
-else:
-    height = quality.replace("p", "")
-    fmt = (
-        f"bestvideo[height<={height}]"
-        f"+bestaudio/"
-        f"best[height<={height}]/"
-        "best"
-    )
+            fmt = "bestvideo+bestaudio/best"
+        else:
+            height = quality.replace("p", "")
+            fmt = (
+                f"bestvideo[height<={height}]"
+                f"+bestaudio/"
+                f"best[height<={height}]/"
+                "best"
+            )
 
     opts = {
         "format": fmt,
@@ -144,7 +144,6 @@ else:
         "socket_timeout": 120,
         "extract_flat": False,
         "merge_output_format": "mp4",
-
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 "
@@ -155,14 +154,9 @@ else:
             ),
             "Accept-Language": "en-US,en;q=0.9",
         },
-
         "extractor_args": {
             "youtube": {
-                "player_client": [
-                    "android",
-                    "web",
-                    "ios"
-                ]
+                "player_client": ["android", "web", "ios"]
             }
         }
     }
