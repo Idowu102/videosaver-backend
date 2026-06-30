@@ -125,8 +125,7 @@ def ydl_opts(outtmpl=None, audio=False, quality="best"):
         else:
             height = quality.replace("p", "")
             fmt = (
-                f"bestvideo[height<={height}]"
-                f"+bestaudio/"
+                f"bestvideo[height<={height}]+bestaudio/"
                 f"best[height<={height}]/"
                 "best"
             )
@@ -144,6 +143,7 @@ def ydl_opts(outtmpl=None, audio=False, quality="best"):
         "socket_timeout": 120,
         "extract_flat": False,
         "merge_output_format": "mp4",
+
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 "
@@ -154,9 +154,14 @@ def ydl_opts(outtmpl=None, audio=False, quality="best"):
             ),
             "Accept-Language": "en-US,en;q=0.9",
         },
+
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "web", "ios"]
+                "player_client": [
+                    "android",
+                    "web",
+                    "ios"
+                ]
             }
         }
     }
@@ -261,37 +266,12 @@ def info(url: str):
             "thumbnail": data.get("thumbnail"),
             "duration": data.get("duration"),
             "uploader": data.get("uploader"),
-            "view_count": data.get("view_count")
+            "view_count": data.get("view_count"),
         }
 
     except Exception as e:
         traceback.print_exc()
         return failed(str(e))
-        return {
-
-            "status": "success",
-
-            "title":
-                data.get("title"),
-
-            "thumbnail":
-                data.get("thumbnail"),
-
-            "duration":
-                data.get("duration"),
-
-            "uploader":
-                data.get("uploader"),
-
-            "view_count":
-                data.get("view_count")
-        }
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return failed(e)
 
 # =========================================================
 # STREAM
