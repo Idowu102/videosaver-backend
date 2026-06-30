@@ -119,56 +119,45 @@ def ydl_opts(outtmpl=None, audio=False, quality="best"):
 
     if audio:
         fmt = "bestaudio/best"
-
     else:
         if quality == "best":
-            fmt = "bestvideo+bestaudio/best"
-        else:
-            height = quality.replace("p", "")
-            fmt = (
-                f"bestvideo[height<={height}]+"
-                f"bestaudio/best[height<={height}]"
-            )
+    fmt = "bestvideo+bestaudio/best"
+else:
+    height = quality.replace("p", "")
+    fmt = (
+        f"bestvideo[height<={height}]"
+        f"+bestaudio/"
+        f"best[height<={height}]/"
+        "best"
+    )
 
-   opts = {
-    "format": fmt,
-    "quiet": True,
-    "no_warnings": True,
-    "noplaylist": True,
-    "nocheckcertificate": True,
-    "ignoreerrors": False,
-    "geo_bypass": True,
-    "retries": 10,
-    "fragment_retries": 10,
-    "socket_timeout": 120,
-    "extract_flat": False,
-    "merge_output_format": "mp4",
-    "http_headers": {
-        "User-Agent": (
-            "Mozilla/5.0 "
-            "(Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/124.0 Safari/537.36"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-    },
-    "extractor_args": {
-        "youtube": {
-            "player_client": [
-                "android",
-                "web",
-                "ios"
-            ]
-        }
-    }
-}
+    opts = {
+        "format": fmt,
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "nocheckcertificate": True,
+        "ignoreerrors": False,
+        "geo_bypass": True,
+        "retries": 10,
+        "fragment_retries": 10,
+        "socket_timeout": 120,
+        "extract_flat": False,
+        "merge_output_format": "mp4",
 
-        # IMPORTANT FOR YOUTUBE
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/124.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+
         "extractor_args": {
-
             "youtube": {
-
                 "player_client": [
                     "android",
                     "web",
@@ -176,25 +165,19 @@ def ydl_opts(outtmpl=None, audio=False, quality="best"):
                 ]
             }
         }
-    # OUTPUT
-    if outtmpl:
+    }
 
+    if outtmpl:
         opts["outtmpl"] = outtmpl
 
-    # FFMPEG
     ffmpeg = shutil.which("ffmpeg")
-
     if ffmpeg:
-
         opts["ffmpeg_location"] = ffmpeg
 
-    # YOUTUBE COOKIES
     if os.path.exists("cookies.txt"):
-
         opts["cookiefile"] = "cookies.txt"
 
     return opts
-
 # =========================================================
 # SAFE ERROR
 # =========================================================
